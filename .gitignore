@@ -32,3 +32,8 @@ git-src
 .cproject
 .ccache
 .vscode*
+.idea/misc.xml
+.idea/modules.xml
+.idea/vcs.xml
+openwrt.iml
+.idea/workspace.xml
