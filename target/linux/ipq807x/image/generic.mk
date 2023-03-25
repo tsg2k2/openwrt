@@ -39,7 +39,7 @@ define Device/verizon_cr1000a
 	BLOCKSIZE := 128k
 	PAGESIZE := 2048
 	DEVICE_DTS_CONFIG := config@verizon_cr1000a
-	SOC := ipq8074
+	SOC := ipq8072
 	DEVICE_PACKAGES := ipq-wifi-verizon_cr1000a
 endef
 TARGET_DEVICES += verizon_cr1000a
