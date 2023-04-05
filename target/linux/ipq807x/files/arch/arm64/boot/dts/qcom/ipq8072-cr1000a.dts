@@ -13,7 +13,11 @@
 
 	aliases {
 		sdhc1 = &sdhc_1;
-		serial0 = &blsp1_uart1;
+		serial0 = &blsp1_uart5;
+	};
+	
+	chosen {
+		stdout-path = "serial0:115200n8";
 	};
 
 	keys {
@@ -39,7 +43,7 @@
 	};
 };
 
-&blsp1_uart1 {
+&blsp1_uart5 {
 	status = "okay";
 };
 
