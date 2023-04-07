@@ -47,12 +47,42 @@
 	status = "okay";
 };
 
+&prng {
+	status = "okay";
+};
+
+&cryptobam {
+	status = "okay";
+};
+
+&crypto {
+	status = "okay";
+};
+
+&qpic_bam {
+	status = "okay";
+};
+
 &sdhc_1 {
 	status = "okay";
 };
 
 &switch {
 	status = "okay";
+};
+
+&ssphy_0 {
+	status = "okay";
+};
+
+&qusb_phy_0 {
+	status = "okay";
+};
+
+&usb_0 {
+	status = "okay";
+
+	// vbus-supply = <&reg_usb_vbus>;
 };
 
 &wifi {
