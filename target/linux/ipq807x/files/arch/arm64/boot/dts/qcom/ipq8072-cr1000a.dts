@@ -12,12 +12,10 @@
 	compatible = "verizon,cr1000a", "qcom,ipq8074";
 
 	aliases {
-		ethernet4 = "/soc/dp5_syn";
-		ethernet5 = "/soc/dp6_syn";
 		sdhc1 = &sdhc_1;
 		serial0 = &blsp1_uart5;
 	};
-
+	
 	chosen {
 		stdout-path = "serial0:115200n8";
 	};
@@ -49,70 +47,12 @@
 	status = "okay";
 };
 
-&mdio {
-	#address-cells = <0x01>;
-	#size-cells = <0x01>;
-	compatible = "qcom,ipq40xx-mdio\0qcom,qca-mdio";
-	reg = <0x90000 0x64>;
-	pinctrl-0 = <0x1e>;
-	pinctrl-names = "default";
-	phy-reset-gpio = <0x1f 0x25 0x00>;
-
-	ethernet-phy@0 {
-		reg = <0x00>;
-	};
-
-	ethernet-phy@1 {
-		reg = <0x01>;
-	};
-
-	ethernet-phy@2 {
-		reg = <0x02>;
-	};
-
-	ethernet-phy@3 {
-		reg = <0x03>;
-	};
-
-	ethernet-phy@4 {
-		reg = <0x04>;
-	};
-
-	ethernet-phy@5 {
-		compatible = "ethernet-phy-ieee802.3-c45";
-		reg = <0x08>;
-	};
-};
-
 &sdhc_1 {
 	status = "okay";
 };
 
 &switch {
 	status = "okay";
-
-	pinctrl-names = "default";
-	switch_lan_bmp = <0x3e>;
-	switch_wan_bmp = <0x40>;
-	switch_mac_mode = <0x00>;
-	switch_mac_mode1 = <0x0e>;
-	switch_mac_mode2 = <0x0d>;
-	bm_tick_mode = <0x00>;
-	tm_tick_mode = <0x00>;
-};
-
-&edma {
-	status = "okay";
-};
-
-&dp5_syn {
-	status = "okay";
-};
-
-&dp6_syn {
-	status = "okay";
-	qcom,link-poll = <0x01>;
-	qcom,phy-mdio-addr = <0x08>;
 };
 
 &wifi {
