@@ -73,6 +73,35 @@
 	status = "okay";
 };
 
+&mdio {
+	status = "okay";
+
+	// ethernet-phy@0 {
+	// 	reg = <0x00>;
+	// };
+
+	// ethernet-phy@1 {
+	// 	reg = <0x01>;
+	// };
+
+	// ethernet-phy@2 {
+	// 	reg = <0x02>;
+	// };
+
+	// ethernet-phy@3 {
+	// 	reg = <0x03>;
+	// };
+
+	// ethernet-phy@4 {
+	// 	reg = <0x04>;
+	// };
+
+	ethernet-phy@5 {
+		compatible = "ethernet-phy-ieee802.3-c45";
+		reg = <0x08>;
+	};
+};
+
 &switch {
 	status = "okay";
 

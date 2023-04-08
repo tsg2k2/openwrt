@@ -28,8 +28,10 @@ ipq807x_setup_interfaces()
 	qnap,301w)
 		ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 lan4 10g-2" "10g-1"
 		;;
+    verizon,cr1000a)
+    	ucidef_set_interfaces_lan_wan "lan" "wan"
+   		;;
 	redmi,ax6|\
-	verizon,cr1000a|\
 	xiaomi,ax3600)
 		ucidef_set_interfaces_lan_wan "lan1 lan2 lan3" "wan"
 		;;
