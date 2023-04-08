@@ -120,11 +120,11 @@
 	qcom,ath11k-calibration-variant = "Verizon-CR1000A";
 };
 
-&dp5 {
+&dp5_syn {
 	status = "okay";
 };
 
-&dp6 {
+&dp6_syn {
 	status = "okay";
 	qcom,link-poll = <0x01>;
 	qcom,phy-mdio-addr = <0x08>;
