@@ -59,6 +59,10 @@
 	status = "okay";
 };
 
+&edma {
+	status = "okay";
+};
+
 &qpic_bam {
 	status = "okay";
 };
@@ -69,9 +73,23 @@
 
 &switch {
 	status = "okay";
+
+	pinctrl-names = "default";
+	//switch_lan_bmp = <0x3e>; // crashes kernel 
+	switch_wan_bmp = <0x40>;
+	switch_mac_mode = <0x00>;
+	switch_mac_mode1 = <0x0e>;
+	switch_mac_mode2 = <0x0d>;
+	bm_tick_mode = <0x00>;
+	tm_tick_mode = <0x00>;
+
 };
 
 &ssphy_0 {
+	status = "okay";
+};
+
+&ssphy_1 {
 	status = "okay";
 };
 
@@ -79,7 +97,17 @@
 	status = "okay";
 };
 
+&qusb_phy_1 {
+	status = "okay";
+};
+
 &usb_0 {
+	status = "okay";
+
+	// vbus-supply = <&reg_usb_vbus>;
+};
+
+&usb_1 {
 	status = "okay";
 
 	// vbus-supply = <&reg_usb_vbus>;
