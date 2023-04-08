@@ -54,6 +54,7 @@ ALLWIFIBOARDS:= \
 	redmi_ax6 \
 	sony_ncp-hg100-cellular \
 	teltonika_rutx \
+	verizon_cr1000a \
 	wallys_dr40x9 \
 	xiaomi_ax3600 \
 	xiaomi_ax9000 \
