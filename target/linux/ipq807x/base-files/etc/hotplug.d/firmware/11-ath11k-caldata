@@ -16,11 +16,13 @@ case "$FIRMWARE" in
 	netgear,wax218|\
 	qnap,301w|\
 	redmi,ax6|\
-	verizon,cr1000a|\
 	xiaomi,ax3600|\
 	xiaomi,ax9000|\
 	zyxel,nbg7815)
 		caldata_extract "0:art" 0x1000 0x20000
+		;;
+  verizon,cr1000a)
+		caldata_extract_mmc "0:ART" 0x1000 0x20000
 		;;
 	esac
 	;;
