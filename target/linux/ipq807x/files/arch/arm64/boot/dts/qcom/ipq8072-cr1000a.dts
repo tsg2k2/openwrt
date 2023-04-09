@@ -16,6 +16,8 @@
 		ethernet5 = &dp6;
 		sdhc1 = &sdhc_1;
 		serial0 = &blsp1_uart5;
+		label-mac-device = &dp5;
+
 	};
 	
 	chosen {
@@ -73,34 +75,19 @@
 	status = "okay";
 };
 
-//&mdio {
-//	status = "okay";
+&mdio {
+	status = "okay";
 
-	// ethernet-phy@0 {
-	// 	reg = <0x00>;
-	// };
+	rtl9301: ethernet-phy@0 {
+		compatible = "ethernet-phy-ieee802.3-c45";
+		reg = <0x0>;
+	};
 
-	// ethernet-phy@1 {
-	// 	reg = <0x01>;
-	// };
-
-	// ethernet-phy@2 {
-	// 	reg = <0x02>;
-	// };
-
-	// ethernet-phy@3 {
-	// 	reg = <0x03>;
-	// };
-
-	// ethernet-phy@4 {
-	// 	reg = <0x04>;
-	// };
-
-//	ethernet-phy@5 {
-//		compatible = "ethernet-phy-ieee802.3-c45";
-//		reg = <0x08>;
-//	};
-//};
+	aqr113c: ethernet-phy@8 {
+		compatible = "ethernet-phy-ieee802.3-c45";
+		reg = <0x08>;
+	};
+};
 
 &switch {
 	status = "okay";
@@ -113,6 +100,21 @@
 	switch_mac_mode2 = <0x0d>;
 	bm_tick_mode = <0x00>;
 	tm_tick_mode = <0x00>;
+
+	qcom,port_phyinfo {
+		
+		port@4 {
+			port_id = <5>;
+			ethernet-phy-ieee802.3-c45;
+			phy_address = <0x0>;
+		};
+
+		port@5 {
+			port_id = <6>;
+			ethernet-phy-ieee802.3-c45;
+			phy_address = <0x8>;
+		};
+	};
 
 };
 
@@ -151,12 +153,14 @@
 
 &dp5_syn {
 	status = "okay";
+	label = "lan";
+	phy-handle = <&rtl9301>;
 };
 
 &dp6_syn {
 	status = "okay";
-	qcom,link-poll = <0x01>;
-	qcom,phy-mdio-addr = <0x08>;
+	label = "wan";
+	phy-handle = <&aqr113c>;
 };
 
 &pcie0 {
