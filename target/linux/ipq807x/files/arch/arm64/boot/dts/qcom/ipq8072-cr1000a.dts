@@ -119,7 +119,7 @@
  	status = "okay";
 
 	pinctrl-names = "default";
-// 	// switch_lan_bmp = <0x3e>;
+	switch_lan_bmp = <0x3e>;
 	switch_wan_bmp = <0x40>;
 	switch_mac_mode = <0x00>;
 	switch_mac_mode1 = <0x0e>;
