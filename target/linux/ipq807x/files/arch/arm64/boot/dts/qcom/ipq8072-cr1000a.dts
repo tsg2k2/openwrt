@@ -31,18 +31,16 @@
 
 		reset {
 			debounce-interval = <0x3c>;
-			gpios = <0x1f 0x2c 0x01>;
+			gpios = <&tlmm 0x2c GPIO_ACTIVE_LOW>;
 			label = "reset";
-			linux,code = <0x198>;
-			linux,input-type = <0x01>;
+			linux,code = <KEY_RESTART>;
 		};
 
 		wps {
 			debounce-interval = <0x3c>;
-			gpios = <0x1f 0x2a 0x01>;
+			gpios = <&tlmm 0x2a GPIO_ACTIVE_LOW>;
 			label = "wps";
-			linux,code = <0x211>;
-			linux,input-type = <0x01>;
+			linux,code = <KEY_WPS_BUTTON>;
 		};
 	};
 };
@@ -75,8 +73,35 @@
 	status = "okay";
 };
 
+ &tlmm {
+	mdio_pins: mdio-pins {
+		mdc {
+			pins = "gpio68";
+			function = "mdc";
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+
+		mdio {
+			pins = "gpio69";
+			function = "mdio";
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+
+		gpio {
+			pins = "gpio44";
+			function = "gpio";
+			bias-pull-up;
+		};
+	};
+};
+
 &mdio {
 	status = "okay";
+	pinctrl-0 = <&mdio_pins>;
+	pinctrl-names = "default";
+	reset-gpios = <&tlmm 37 GPIO_ACTIVE_LOW>;
 
 	rtl9301: ethernet-phy@0 {
 		compatible = "ethernet-phy-ieee802.3-c45";
@@ -86,14 +111,15 @@
 	aqr113c: ethernet-phy@8 {
 		compatible = "ethernet-phy-ieee802.3-c45";
 		reg = <0x08>;
+		// reset-gpios = <&tlmm 63 GPIO_ACTIVE_LOW>;
 	};
 };
 
-&switch {
-	status = "okay";
+ &switch {
+ 	status = "okay";
 
 	pinctrl-names = "default";
-	switch_lan_bmp = <0x3e>;
+// 	// switch_lan_bmp = <0x3e>;
 	switch_wan_bmp = <0x40>;
 	switch_mac_mode = <0x00>;
 	switch_mac_mode1 = <0x0e>;
@@ -116,7 +142,7 @@
 		};
 	};
 
-};
+ };
 
 &ssphy_0 {
 	status = "okay";
@@ -154,7 +180,7 @@
 &dp5_syn {
 	status = "okay";
 	label = "lan";
-	phy-handle = <&rtl9301>;
+	// phy-handle = <&rtl9301>;
 };
 
 &dp6_syn {
