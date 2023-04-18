@@ -40,7 +40,7 @@ define Device/verizon_cr1000a
 	PAGESIZE := 2048
 	DEVICE_DTS_CONFIG := config@verizon_cr1000a
 	SOC := ipq8072
-	DEVICE_PACKAGES := ipq-wifi-verizon_cr1000a e2fsprogs kmod-fs-ext4 losetup kmod-ath11k-pci mdio-tools ethtool-full
+	DEVICE_PACKAGES := ipq-wifi-verizon_cr1000a ath11k-firmware-qcn9074 e2fsprogs kmod-fs-ext4 losetup kmod-ath11k-pci mdio-tools ethtool-full
 endef
 TARGET_DEVICES += verizon_cr1000a
 
