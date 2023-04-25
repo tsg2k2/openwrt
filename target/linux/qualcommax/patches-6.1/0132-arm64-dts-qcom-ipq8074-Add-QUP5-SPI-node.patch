@@ -1,0 +1,36 @@
+From c182970a0ea08c79241d6dc18487199312172107 Mon Sep 17 00:00:00 2001
+From: Robert Marko <robimarko@gmail.com>
+Date: Tue, 25 Apr 2023 10:33:23 +0200
+Subject: [PATCH] arm64: dts: qcom: ipq8074: Add QUP5 SPI node
+
+Add node to support the QUP5 SPI controller inside of IPQ8074.
+Some devices use this bus in order to manage external switches.
+
+Signed-off-by: Robert Marko <robimarko@gmail.com>
+---
+ arch/arm64/boot/dts/qcom/ipq8074.dtsi | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+--- a/arch/arm64/boot/dts/qcom/ipq8074.dtsi
++++ b/arch/arm64/boot/dts/qcom/ipq8074.dtsi
+@@ -765,6 +765,20 @@
+ 			status = "disabled";
+ 		};
+ 
++		blsp1_spi5: spi@78b9000 {
++			compatible = "qcom,spi-qup-v2.2.1";
++			#address-cells = <1>;
++			#size-cells = <0>;
++			reg = <0x78b9000 0x600>;
++			interrupts = <GIC_SPI 299 IRQ_TYPE_LEVEL_HIGH>;
++			clocks = <&gcc GCC_BLSP1_QUP5_SPI_APPS_CLK>,
++				 <&gcc GCC_BLSP1_AHB_CLK>;
++			clock-names = "core", "iface";
++			dmas = <&blsp_dma 20>, <&blsp_dma 21>;
++			dma-names = "tx", "rx";
++			status = "disabled";
++		};
++
+ 		blsp1_i2c6: i2c@78ba000 {
+ 			compatible = "qcom,i2c-qup-v2.2.1";
+ 			#address-cells = <1>;
