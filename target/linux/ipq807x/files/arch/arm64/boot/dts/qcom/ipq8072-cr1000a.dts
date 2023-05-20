@@ -26,8 +26,8 @@
 
 	keys {
 		compatible = "gpio-keys";
-		pinctrl-0 = <0x5b>;
-		pinctrl-names = "default";
+		// pinctrl-0 = <&button_pins>;
+		// pinctrl-names = "default";
 
 		reset {
 			debounce-interval = <0x3c>;
@@ -42,6 +42,38 @@
 			label = "wps";
 			linux,code = <KEY_WPS_BUTTON>;
 		};
+	};
+};
+
+&blsp1_i2c3 {
+	status = "okay";
+	pinctrl-0 = <&i2c_2_pins>;
+	pinctrl-names = "default";
+};
+
+&blsp1_spi1 {
+	status = "okay";
+	
+	m25p80@0 {
+	 	#address-cells = <0x01>;
+	 	#size-cells = <0x01>;
+	 	reg = <0x00>;
+	 	compatible = "n25q128a11", "jdec,spi-nor";
+	 	linux,modalias = "m25p80", "n25q128a11";
+	 	spi-max-frequency = <0x2faf080>;
+	 	use-default-sizes;
+	};
+};
+
+&blsp1_spi5 {
+	pinctrl-0 = <&spi_4_pins>;
+	pinctrl-names = "default";
+	status = "ok";
+	spi@4 {
+	 	// compatible = "qca,spidev";
+		compatible = "cisco,spi-petra";
+		reg = <0x00>;
+		spi-max-frequency = <12000000>;
 	};
 };
 
@@ -73,7 +105,7 @@
 	status = "okay";
 };
 
- &tlmm {
+&tlmm {
 	mdio_pins: mdio-pins {
 		mdc {
 			pins = "gpio68";
@@ -95,6 +127,36 @@
 			bias-pull-up;
 		};
 	};
+
+	spi_4_pins: spi-4-pins {
+		pins = "gpio5", "gpio6", "gpio7", "gpio8";
+		function = "blsp4_spi0";
+		drive-strength = <8>;
+		bias-disable;
+	};
+	
+	i2c_2_pins: i2c-2-pins {
+		pins = "gpio46", "gpio47";
+		function = "blsp2_i2c";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	// button_pins: button_pins {
+	// 	wps_button {
+	// 		pins = "gpio42";
+	// 		function = "gpio";
+	// 		drive-strength = <0x08>;
+	// 		bias-pull-up;
+	// 	};
+
+	// 	reset_button {
+	// 		pins = "gpio44";
+	// 		function = "gpio";
+	// 		drive-strength = <0x08>;
+	// 		bias-pull-up;
+	// 	};
+	// };
 };
 
 &mdio {
@@ -103,9 +165,9 @@
 	pinctrl-names = "default";
 	reset-gpios = <&tlmm 37 GPIO_ACTIVE_LOW>;
 
-	rtl9301: ethernet-phy@0 {
-		compatible = "ethernet-phy-ieee802.3-c45";
-		reg = <0x0>;
+	rtl9301: ethernet-phy@f {
+		// compatible = "ethernet-phy-ieee802.3-c45";
+		reg = <0x0f>;
 	};
 
 	aqr113c: ethernet-phy@8 {
@@ -132,17 +194,17 @@
 		port@4 {
 			port_id = <5>;
 			ethernet-phy-ieee802.3-c45;
-			phy_address = <0x0>;
+			phy_address = <0x0f>;
 		};
 
 		port@5 {
 			port_id = <6>;
 			ethernet-phy-ieee802.3-c45;
-			phy_address = <0x8>;
+			phy_address = <0x08>;
 		};
 	};
 
- };
+};
 
 &ssphy_0 {
 	status = "okay";
@@ -180,7 +242,7 @@
 &dp5_syn {
 	status = "okay";
 	label = "lan";
-	// phy-handle = <&rtl9301>;
+	phy-handle = <&rtl9301>;
 };
 
 &dp6_syn {
