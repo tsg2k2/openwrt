@@ -57,6 +57,7 @@ ipq807x_setup_macs()
     verizon,cr1000a)
     	wan_mac=$(mmc_get_mac_ascii "0:APPSBLENV" baseMAC)
         lan_mac=$(macaddr_add "$wan_mac" 1)
+        label_mac=wan_mac
         ;;
     esac
 
