@@ -87,10 +87,10 @@ platform_do_upgrade() {
     hlos_start_hex=$(printf "%X\n" "$hlos_start")
     hlos_size_hex=$(printf "%X\n" "$hlos_size")
     mmc_do_upgrade "$1"
-    _fw_setenv set_custom_bootargs "setenv bootargs console=ttyMSM0,115200n8 root=$rootpart rootwait"
-    _fw_setenv read_hlos_emmc "mmc read 44000000 0x$hlos_start_hex 0x$hlos_size_hex"
-    _fw_setenv setup_and_boot "run set_custom_bootargs;run read_hlos_emmc; bootm 44000000"
-    _fw_setenv bootcmd "run setup_and_boot"
+    fw_setenv set_custom_bootargs "setenv bootargs console=ttyMSM0,115200n8 root=$rootpart rootwait"
+    fw_setenv read_hlos_emmc "mmc read 44000000 0x$hlos_start_hex 0x$hlos_size_hex"
+    fw_setenv setup_and_boot "run set_custom_bootargs;run read_hlos_emmc; bootm 44000000"
+    fw_setenv bootcmd "run setup_and_boot"
     ;;
 	zyxel,nbg7815)
 		local config_mtdnum="$(find_mtd_index 0:bootconfig)"
