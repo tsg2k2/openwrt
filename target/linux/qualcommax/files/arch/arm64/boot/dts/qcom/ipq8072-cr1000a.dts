@@ -180,6 +180,11 @@
 		reg = <0x08>;
 		// reset-gpios = <&tlmm 63 GPIO_ACTIVE_LOW>;
 	};
+	mxl3711: ethernet-phy@f {
+		//compatible = "ethernet-phy-ieee802.3-c45";
+		reg = <0x0f>;
+		// reset-gpios = <&tlmm 63 GPIO_ACTIVE_LOW>;
+	};
 };
 
  &switch {
