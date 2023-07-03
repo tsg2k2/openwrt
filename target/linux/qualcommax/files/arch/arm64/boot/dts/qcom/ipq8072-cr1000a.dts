@@ -211,7 +211,7 @@
 			phy_address = <0x04>;
 			// port_mac_sel = "QGMAC_PORT";
 			// port_mac_sel = "XGMAC_PORT"; todo
-			// media-type = "sfp";
+			//media-type = "sfp";
 			// media-type = "sfp_sgmii";
 		};
 
