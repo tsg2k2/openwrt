@@ -1,0 +1,73 @@
+From 6ef5ef90b3092c1e108f560962691ff9e6c62b1e Mon Sep 17 00:00:00 2001
+From: Robert Marko <robimarko@gmail.com>
+Date: Thu, 22 Jun 2023 18:39:27 +0200
+Subject: [PATCH] SSDK: set OF node for the SFP PHY
+
+Currently, SSDK is creating a fake SFP PHY which has no OF node populated,
+thus making it impossible to pass it to NSS-DP so port can actually work.
+
+We eliminated QCA-s connecting of the PHY by manually creating a string
+and then matching by name and instead only support passing the PHY as
+phandle via phy-handle.
+
+So, lets just use the switch port node to which the SFP is connected to
+anyway and set it as the PHY device OF node so we can pass it to NSS-DP.
+
+Signed-off-by: Robert Marko <robimarko@gmail.com>
+---
+ include/init/ssdk_dts.h | 1 +
+ src/hsl/phy/sfp_phy.c   | 7 +++++++
+ src/init/ssdk_dts.c     | 7 +++++++
+ 3 files changed, 15 insertions(+)
+
+--- a/include/init/ssdk_dts.h
++++ b/include/init/ssdk_dts.h
+@@ -79,6 +79,7 @@ typedef struct
+ 	a_uint32_t port_speed;
+ 	phy_features_t phy_features;
+ 	struct mii_bus *miibus;
++	struct device_node *port_node;
+ } ssdk_port_phyinfo;
+
+ typedef struct
+--- a/src/hsl/phy/sfp_phy.c
++++ b/src/hsl/phy/sfp_phy.c
+@@ -148,8 +148,10 @@ int sfp_phy_device_setup(a_uint32_t dev_
+ 	struct qca_phy_priv *priv;
+ 	a_uint32_t addr = 0;
+ 	struct mii_bus *bus;
++	ssdk_port_phyinfo *port_phyinfo;
+
+ 	priv = ssdk_phy_priv_data_get(dev_id);
++	port_phyinfo = ssdk_port_phyinfo_get(dev_id, port);
+ 	/*create phy device*/
+ #if defined(IN_PHY_I2C_MODE)
+ 	if (hsl_port_phy_access_type_get(dev_id, port) == PHY_I2C_ACCESS) {
+@@ -169,6 +171,11 @@ int sfp_phy_device_setup(a_uint32_t dev_
+ 	phy_device_register(phydev);
+
+ 	phydev->priv = priv;
++	/*
++	 * Set the PHY OF node in order to be able to later connect the
++	 * fake SFP PHY by passing it as a phandle in phy-handle.
++	 */
++	phydev->mdio.dev.of_node = port_phyinfo->port_node;
+ #endif
+ 	return 0;
+ }
+--- a/src/init/ssdk_dts.c
++++ b/src/init/ssdk_dts.c
+@@ -748,6 +748,13 @@ static sw_error_t ssdk_dt_parse_phy_info
+ 						(a_uint32_t)phy_reset_gpio);
+ 				}
+ 			}
++
++			/*
++			 * Save the port node so it can be passed as the
++			 * fake SFP PHY OF node in order to be able to
++			 * pass the SFP phy via phy-handle
++			 */
++			port_phyinfo->port_node = port_node;
+ 		}
+ 	}
+

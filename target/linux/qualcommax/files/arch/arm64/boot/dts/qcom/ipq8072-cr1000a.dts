@@ -12,14 +12,14 @@
 	model = "Verizon CR1000A";
 	compatible = "verizon,cr1000a", "qcom,ipq8074";
 
-	memory {
-		device_type = "memory";
-		reg = <0x00 0x40000000 0x00 0x80000000>;
-	};
+	// memory {
+	// 	device_type = "memory";
+	// 	reg = <0x00 0x40000000 0x00 0x80000000>;
+	// };
 
 	aliases {
-		eth0 = &dp5;
-		eth1 = &dp6;
+		ethernet4 = &dp5;
+		ethernet5 = &dp6;
 		sdhc1 = &sdhc_1;
 		serial0 = &blsp1_uart5;
 		label-mac-device = &dp5_syn;
@@ -31,8 +31,8 @@
 
 	keys {
 		compatible = "gpio-keys";
-		// pinctrl-0 = <&button_pins>;
-		// pinctrl-names = "default";
+		pinctrl-0 = <&button_pins>;
+		pinctrl-names = "default";
 
 		reset {
 			debounce-interval = <0x3c>;
@@ -126,11 +126,11 @@
 			bias-pull-up;
 		};
 
-		gpio {
-			pins = "gpio44";
-			function = "gpio";
-			bias-pull-up;
-		};
+		// gpio {
+		// 	pins = "gpio44";
+		// 	function = "gpio";
+		// 	bias-pull-up;
+		// };
 	};
 
 	spi_4_pins: spi-4-pins {
@@ -147,21 +147,21 @@
 		bias-disable;
 	};
 
-	// button_pins: button_pins {
-	// 	wps_button {
-	// 		pins = "gpio42";
-	// 		function = "gpio";
-	// 		drive-strength = <0x08>;
-	// 		bias-pull-up;
-	// 	};
+	button_pins: button_pins {
+		wps_button {
+			pins = "gpio42";
+			function = "gpio";
+			drive-strength = <0x08>;
+			bias-pull-up;
+		};
 
-	// 	reset_button {
-	// 		pins = "gpio44";
-	// 		function = "gpio";
-	// 		drive-strength = <0x08>;
-	// 		bias-pull-up;
-	// 	};
-	// };
+		reset_button {
+			pins = "gpio44";
+			function = "gpio";
+			drive-strength = <0x08>;
+			bias-pull-up;
+		};
+	};
 };
 
 &mdio {
@@ -180,6 +180,7 @@
 		reg = <0x08>;
 		// reset-gpios = <&tlmm 63 GPIO_ACTIVE_LOW>;
 	};
+
 	mxl3711: ethernet-phy@f {
 		//compatible = "ethernet-phy-ieee802.3-c45";
 		reg = <0x0f>;
@@ -202,7 +203,7 @@
 
 	qcom,port_phyinfo {
 		
-		port@4 {
+		rtl9301port: port@4 {
 			port_id = <5>;
 			// ethernet-phy-idaaaa.bbbb;
 
@@ -210,7 +211,7 @@
 			phy_address = <0x04>;
 			// port_mac_sel = "QGMAC_PORT";
 			// port_mac_sel = "XGMAC_PORT"; todo
-			//media-type = "sfp";
+			// media-type = "sfp";
 			// media-type = "sfp_sgmii";
 		};
 
@@ -259,7 +260,7 @@
 &dp5_syn {
 	status = "okay";
 	label = "lan";
-	// phy-handle = <&rtl9301>;
+	phy-handle = <&rtl9301port>;
 };
 
 &dp6_syn {
