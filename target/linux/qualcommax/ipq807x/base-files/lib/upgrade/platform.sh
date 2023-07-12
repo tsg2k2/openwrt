@@ -88,7 +88,7 @@ platform_do_upgrade() {
 		hlos_size_hex=$(printf "%X\n" "$hlos_size")
 		fw_setenv set_custom_bootargs "setenv bootargs console=ttyMSM0,115200n8 root=$rootpart rootwait fstools_ignore_partname=1"
 		fw_setenv read_hlos_emmc "mmc read 44000000 0x$hlos_start_hex 0x$hlos_size_hex"
-		fw_setenv setup_and_boot "run set_custom_bootargs;run read_hlos_emmc; bootm 44000000"
+		fw_setenv setup_and_boot "aq_load_fw 8;run set_custom_bootargs;run read_hlos_emmc; bootm 44000000"
 		fw_setenv bootcmd "run setup_and_boot"
 		mmc_do_upgrade "$1"
 		;;
