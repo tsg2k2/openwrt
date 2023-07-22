@@ -86,6 +86,24 @@ mtd_get_mac_ascii() {
 	get_mac_ascii "$part" "$key"
 }
 
+mmc_get_mac_ascii() {
+	local mtdname="$1"
+	local key="$2"
+	local part
+	local mac_dirty
+
+	part=$(find_mmc_part "$mtdname")
+	if [ -z "$part" ]; then
+		echo "mtd_get_mac_ascii: partition $mtdname not found!" >&2
+		return
+	fi
+
+	mac_dirty=$(strings "$part" | sed -n 's/^'"$key"'=//p')
+
+	# "canonicalize" mac
+	[ -n "$mac_dirty" ] && macaddr_canonicalize "$mac_dirty"
+}
+
 mtd_get_mac_encrypted_arcadyan() {
 	local iv="00000000000000000000000000000000"
 	local key="2A4B303D7644395C3B2B7053553C5200"
