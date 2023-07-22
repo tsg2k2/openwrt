@@ -9,6 +9,9 @@ PKG_SOURCE_URL=$(PROJECT_GIT)/project/firmware/qca-wireless.git
 PKG_SOURCE_DATE:=2023-09-16
 PKG_SOURCE_VERSION:=57aa1b1562ac60f11a6bec8be02cd3b68b12b3fa
 PKG_MIRROR_HASH:=f8f9ab78ae85180a6e601d7c911d6c350b0cc132172d4baefc8f9fe07566ce0f
+#PKG_SOURCE_URL=https://github.com/tsg2k2/firmware_qca-wireless.git
+#PKG_SOURCE_VERSION:=b9bfab2dc44291770e9f9993d7ea0da894d740b
+#PKG_MIRROR_HASH:=f1b0c796b7607b6518a2bc8f500814d687ff743a41123a949b943eaebb88f1db
 
 PKG_FLAGS:=nonshared
 
@@ -145,6 +148,7 @@ $(eval $(call generate-ipq-wifi-package,netgear_wax620,Netgear WAX620))
 $(eval $(call generate-ipq-wifi-package,qnap_301w,QNAP 301w))
 $(eval $(call generate-ipq-wifi-package,prpl_haze,prpl Haze))
 $(eval $(call generate-ipq-wifi-package,redmi_ax6,Redmi AX6))
+$(eval $(call generate-ipq-wifi-package,verizon_cr1000a,Verizon CR1000A))
 $(eval $(call generate-ipq-wifi-package,wallys_dr40x9,Wallys DR40X9))
 $(eval $(call generate-ipq-wifi-package,xiaomi_ax3600,Xiaomi AX3600))
 $(eval $(call generate-ipq-wifi-package,xiaomi_ax9000,Xiaomi AX9000))
