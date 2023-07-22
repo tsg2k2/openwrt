@@ -57,6 +57,11 @@ qnap,301w)
 spectrum,sax1v1k)
 	ubootenv_add_mmc "0:APPSBLENV" "" "0x0" "0x40000" "0x40000" "1"
 	;;
+verizon,cr1000a)
+    part="$(find_mmc_part 0:APPSBLENV)"
+    [ -n "$part" ] && \
+    	ubootenv_add_uci_config "$part" "0x0" "0x40000" "0x40000" "1"
+    ;;
 esac
 
 config_load ubootenv
