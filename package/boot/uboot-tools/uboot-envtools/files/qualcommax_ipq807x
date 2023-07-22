@@ -83,6 +83,11 @@ spectrum,sax1v1k)
 tcl,linkhub-hh500v)
 	ubootenv_add_uci_config $(ubootenv_mtdinfo)
 	;;
+verizon,cr1000a)
+    part="$(find_mmc_part 0:APPSBLENV)"
+    [ -n "$part" ] && \
+    	ubootenv_add_uci_config "$part" "0x0" "0x40000" "0x40000" "1"
+    ;;
 esac
 
 config_load ubootenv
