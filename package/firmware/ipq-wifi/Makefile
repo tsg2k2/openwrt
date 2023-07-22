@@ -9,6 +9,9 @@ PKG_SOURCE_URL=$(PROJECT_GIT)/project/firmware/qca-wireless.git
 PKG_SOURCE_DATE:=2024-10-08
 PKG_SOURCE_VERSION:=dcbab62272bf5cab2ed857bc655d240970e14f2a
 PKG_MIRROR_HASH:=e53a3872abf5e35db6baaceb56e6ffa289f8dd9b6226cf8a4d5b87b541179175
+#PKG_SOURCE_URL=https://github.com/tsg2k2/firmware_qca-wireless.git
+#PKG_SOURCE_VERSION:=b9bfab2dc44291770e9f9993d7ea0da894d740b
+#PKG_MIRROR_HASH:=f1b0c796b7607b6518a2bc8f500814d687ff743a41123a949b943eaebb88f1db
 PKG_FLAGS:=nonshared
 
 include $(INCLUDE_DIR)/package.mk
