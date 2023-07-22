@@ -48,37 +48,6 @@
 			linux,code = <KEY_WPS_BUTTON>;
 		};
 	};
-
-
-	// fan5646_vreg: fan5646_vreg {
-	// 	status = "ok";
-	// 	compatible = "regulator-fixed";
-	// 	regulator-name = "fan5646_vreg";
-	// 	gpio = <&tlmm 58 0x0>;
-	// 	enable-active-high;
-	// };
-
-	
-};
-
-&soc {
-	fan5646_vreg: dummy_reg {
-		compatible = "regulator-fixed";
-		regulator-name = "fan5646_vreg";
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-	};
-
-	fan5646 {
-		status = "ok";
-		compatible = "fsi,leds-fan5646";
-		linux-name = "white";
-		rgb-name = "rgb";
-		gpios = <&tlmm 0x1d 0x2>; /* COMM GPIO, GPIOF_DIR_OUT | GPIOF_INIT_HIGH */
-		full-current = <0>; /* Default current 5 mA */
-		tsleep = <7>;
-		fan5646-supply = <&fan5646_vreg>; /* phandle of our regulator node */
-	};
 };
 
 &blsp1_i2c3 {
@@ -223,8 +192,9 @@
  	status = "okay";
 
 	pinctrl-names = "default";
-    switch_wan_bmp = <ESS_PORT5>;
-	switch_wan_bmp = <ESS_PORT6>;
+	// switch_lan_bmp = <0x3e>;
+	switch_lan_bmp = <0x20>;
+	switch_wan_bmp = <0x40>;
 	switch_mac_mode = <0x00>;  // PSGMII
 	switch_mac_mode1 = <0x0e>; // 10GBase-R
 	switch_mac_mode2 = <0x0d>; // UXSGMII
@@ -333,5 +303,3 @@
 &pcie_qmp1 {
 	status = "okay";
 };
-
-
