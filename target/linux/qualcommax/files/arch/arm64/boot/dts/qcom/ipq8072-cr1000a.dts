@@ -223,9 +223,8 @@
  	status = "okay";
 
 	pinctrl-names = "default";
-	// switch_lan_bmp = <0x3e>;
-	switch_lan_bmp = <0x20>;
-	switch_wan_bmp = <0x40>;
+    switch_wan_bmp = <ESS_PORT5>;
+	switch_wan_bmp = <ESS_PORT6>;
 	switch_mac_mode = <0x00>;  // PSGMII
 	switch_mac_mode1 = <0x0e>; // 10GBase-R
 	switch_mac_mode2 = <0x0d>; // UXSGMII
