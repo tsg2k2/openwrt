@@ -804,7 +804,7 @@ static int fan5646_of_init(struct device *dev)
 		return rc;
 	}
 
-	pdata->com_gpio = of_get_gpio(np, 0);
+	pdata->com_gpio = of_get_named_gpio(np, "gpios", 0);
 	if (pdata->com_gpio < 0) {
 		dev_err(dev, "Error getting comm gpio\n");
 		return -EINVAL;
