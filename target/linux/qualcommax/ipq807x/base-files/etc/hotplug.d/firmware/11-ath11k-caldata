@@ -77,7 +77,8 @@ case "$FIRMWARE" in
 		ath11k_set_macflag
 		;;
 	prpl,haze|\
-	spectrum,sax1v1k)
+	spectrum,sax1v1k|\
+	verizon,cr1000a)
 		caldata_extract_mmc "0:ART" 0x1000 0x20000
 		;;
 	tplink,eap660hd-v1)
