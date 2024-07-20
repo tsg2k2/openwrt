@@ -32,7 +32,6 @@ endef
 ALLWIFIBOARDS:= \
 	8devices_mango \
 	arcadyan_aw1000 \
-	asus_rt-ax89x \
 	buffalo_wxr-5950ax12 \
 	cmcc_rm2-6 \
 	compex_wpq873 \
@@ -42,7 +41,6 @@ ALLWIFIBOARDS:= \
 	linksys_mx4200 \
 	linksys_mx5300 \
 	linksys_mx8500 \
-	linksys_whw03 \
 	netgear_lbr20 \
 	netgear_rax120v2 \
 	netgear_sxk80 \
@@ -156,7 +154,6 @@ endef
 
 $(eval $(call generate-ipq-wifi-package,8devices_mango,8devices Mango))
 $(eval $(call generate-ipq-wifi-package,arcadyan_aw1000,Arcadyan AW1000))
-$(eval $(call generate-ipq-wifi-package,asus_rt-ax89x,Asus RT-AX89X))
 $(eval $(call generate-ipq-wifi-package,buffalo_wxr-5950ax12,Buffalo WXR-5950AX12))
 $(eval $(call generate-ipq-wifi-package,cmcc_rm2-6,CMCC RM2-6))
 $(eval $(call generate-ipq-wifi-package,compex_wpq873,Compex WPQ-873))
@@ -166,7 +163,6 @@ $(eval $(call generate-ipq-wifi-package,edimax_cax1800,Edimax CAX1800))
 $(eval $(call generate-ipq-wifi-package,linksys_mx4200,Linksys MX4200))
 $(eval $(call generate-ipq-wifi-package,linksys_mx5300,Linksys MX5300))
 $(eval $(call generate-ipq-wifi-package,linksys_mx8500,Linksys MX8500))
-$(eval $(call generate-ipq-wifi-package,linksys_whw03,Linksys WHW03))
 $(eval $(call generate-ipq-wifi-package,netgear_lbr20,Netgear LBR20))
 $(eval $(call generate-ipq-wifi-package,netgear_rax120v2,Netgear RAX120v2))
 $(eval $(call generate-ipq-wifi-package,netgear_sxk80,Netgear SXK80))
