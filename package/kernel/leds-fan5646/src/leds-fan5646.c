@@ -819,6 +819,7 @@ static int fan5646_of_init(struct device *dev)
 		return -ENODEV;
 	}
 
+
 	rc = of_property_read_string(sp, "regulator-name", &pdata->regname);
 	if (rc)
 		dev_err(dev, "Error reading regulator name rc %d\n", rc);
@@ -892,7 +893,7 @@ static int fan5646_probe(struct platform_device *pdev)
 	return rc;
 }
 
-static int fan5646_remove(struct platform_device *pdev)
+static void fan5646_remove(struct platform_device *pdev)
 {
 	struct fan5646_data *pdata = dev_get_drvdata(&pdev->dev);
 
@@ -901,8 +902,6 @@ static int fan5646_remove(struct platform_device *pdev)
 	regulator_disable(pdata->vreg);
 	fan5646_remove_device_files(&pdev->dev);
 	fan5646_unregister_leds(&pdev->dev);
-
-	return 0;
 }
 
 static struct of_device_id fan5646_match_table[] = {
