@@ -242,10 +242,10 @@ platform_do_upgrade() {
 		emmc_do_upgrade "$1"
 		;;
 	verizon,cr1000a)
-		kernelname="0:HLOS"
-		rootfsname="rootfs"
-		rootpart=$(find_mmc_part "$rootfsname")
-		mmcblk_hlos=$(find_mmc_part "$kernelname" | sed -e "s/^\/dev\///")
+		CI_KERNPART="0:HLOS"
+    CI_ROOTPART="rootfs"
+		rootpart=$(find_mmc_part "$CI_ROOTPART")
+		mmcblk_hlos=$(find_mmc_part "$CI_KERNPART" | sed -e "s/^\/dev\///")
 		hlos_start=$(cat /sys/class/block/$mmcblk_hlos/start)
 		hlos_size=$(cat /sys/class/block/$mmcblk_hlos/size)
 		hlos_start_hex=$(printf "%X\n" "$hlos_start")
@@ -254,7 +254,7 @@ platform_do_upgrade() {
 		fw_setenv read_hlos_emmc "mmc read 44000000 0x$hlos_start_hex 0x$hlos_size_hex"
 		fw_setenv setup_and_boot "run set_custom_bootargs;run read_hlos_emmc; bootm 44000000"
 		fw_setenv bootcmd "run setup_and_boot"
-		mmc_do_upgrade "$1"
+		emmc_do_upgrade "$1"
 		;;
 	redmi,ax6|\
 	xiaomi,ax3600|\
