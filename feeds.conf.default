@@ -3,6 +3,7 @@ src-git luci https://git.openwrt.org/project/luci.git
 src-git routing https://git.openwrt.org/feed/routing.git
 src-git telephony https://git.openwrt.org/feed/telephony.git
 src-git nsspackages https://github.com/robimarko/nss-packages.git
+src-git mxl https://github.com/hurrian/kmod-phy-mxl371x.git
 #src-git video https://github.com/openwrt/video.git
 #src-git targets https://github.com/openwrt/targets.git
 #src-git oldpackages http://git.openwrt.org/packages.git
