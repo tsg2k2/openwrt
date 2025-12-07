@@ -213,9 +213,8 @@
 	};
 
 	mxl3711: ethernet-phy@f {
-		//compatible = "ethernet-phy-ieee802.3-c45";
 		reg = <0x0f>;
-		// reset-gpios = <&tlmm 63 GPIO_ACTIVE_LOW>;
+		phy-mode = "2500base-x";  /* HSGMII @ 2500 Mbps or "sgmii" for 1000 Mbps */
 	};
 };
 
@@ -328,5 +327,3 @@
 &pcie_qmp1 {
 	status = "okay";
 };
-
-
