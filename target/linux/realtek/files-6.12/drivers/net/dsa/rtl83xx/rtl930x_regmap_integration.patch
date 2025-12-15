@@ -1,0 +1,44 @@
+--- a/target/linux/realtek/files-6.12/drivers/net/dsa/rtl83xx/Makefile
++++ b/target/linux/realtek/files-6.12/drivers/net/dsa/rtl83xx/Makefile
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0
+ obj-$(CONFIG_NET_DSA_RTL83XX)	+= common.o dsa.o \
+-	rtl838x.o rtl839x.o rtl930x.o rtl931x.o debugfs.o qos.o tc.o
++	rtl838x.o rtl839x.o rtl930x.o rtl930x_regmap.o rtl931x.o debugfs.o qos.o tc.o
++obj-$(CONFIG_NET_DSA_RTL83XX_RTL930X_SPI) += rtl930x_spi.o
+
+--- a/target/linux/realtek/files-6.12/drivers/net/dsa/rtl83xx/Kconfig
++++ b/target/linux/realtek/files-6.12/drivers/net/dsa/rtl83xx/Kconfig
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+ config NET_DSA_RTL83XX
+ 	tristate "Realtek RTL838X/RTL839X/RTL930X/RTL931X Ethernet switch support"
++	select REGMAP_MMIO
+ 	depends on NET_DSA && RTL838X
+ 	help
+ 	  This driver adds support for Realtek RTL83xx series switching.
+@@ -10,3 +11,12 @@ config NET_DSA_RTL83XX_RTL930X_L3_OFFLO
+ 	bool "Realtek RTL930x layer 3 offload (experimental)"
+ 	depends on NET_DSA_RTL83XX
+ 	default n
++
++config NET_DSA_RTL83XX_RTL930X_REGMAP
++	bool "Use regmap for RTL930x register access"
++	depends on NET_DSA_RTL83XX
++	select REGMAP_MMIO
++	default n
++	help
++	  Use regmap API for RTL930x register access instead of direct
++	  memory-mapped I/O. This provides better debugging and abstraction.
++
++config NET_DSA_RTL83XX_RTL930X_SPI
++	tristate "RTL930x SPI slave interface support"
++	depends on NET_DSA_RTL83XX && SPI
++	select NET_DSA_RTL83XX_RTL930X_REGMAP
++	select REGMAP_SPI
++	default n
++	help
++	  Enable SPI slave interface support for RTL930x switch chips.
++	  This allows controlling the switch via SPI bus instead of
++	  memory-mapped I/O. Useful for external switch configurations
++	  where the switch is connected via SPI to the host processor.
