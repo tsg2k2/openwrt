@@ -1,0 +1,39 @@
+. /lib/functions.sh
+
+board=$(board_name)
+
+case "$board" in
+verizon,cr1000a)
+	# nftables flowtable fast path. The hw flag is real on this board:
+	# kmod-ppe-flowtable programs established wired LAN<->WAN flows
+	# into the PPE flow engine (line-rate NAT, CPU idle); anything the
+	# hardware does not take keeps the software fastpath. The glue
+	# refuses to arm under a non-8021q switch tagger, in which case
+	# this degrades to the plain software flowtable.
+	uci set firewall.@defaults[0].flow_offloading='1'
+	uci set firewall.@defaults[0].flow_offloading_hw='1'
+
+	# Bench-bed convenience: this initramfs lab image is managed over
+	# the WAN port; keep SSH and LuCI reachable with the firewall
+	# running.
+	uci -q delete firewall.allow_ssh_wan
+	uci set firewall.allow_ssh_wan=rule
+	uci set firewall.allow_ssh_wan.name='Allow-SSH-WAN-bench'
+	uci set firewall.allow_ssh_wan.src='wan'
+	uci set firewall.allow_ssh_wan.proto='tcp'
+	uci set firewall.allow_ssh_wan.dest_port='22'
+	uci set firewall.allow_ssh_wan.target='ACCEPT'
+
+	uci -q delete firewall.allow_http_wan
+	uci set firewall.allow_http_wan=rule
+	uci set firewall.allow_http_wan.name='Allow-HTTP-WAN-bench'
+	uci set firewall.allow_http_wan.src='wan'
+	uci set firewall.allow_http_wan.proto='tcp'
+	uci set firewall.allow_http_wan.dest_port='80'
+	uci set firewall.allow_http_wan.target='ACCEPT'
+
+	uci commit firewall
+	;;
+esac
+
+exit 0

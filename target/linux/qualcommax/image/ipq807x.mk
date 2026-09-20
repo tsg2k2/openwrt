@@ -136,6 +136,30 @@ define Device/cmcc_rm2-6
 endef
 TARGET_DEVICES += cmcc_rm2-6
 
+define Device/verizon_cr1000a
+	$(call Device/FitImage)
+	$(call Device/UbiFit)
+	DEVICE_VENDOR := Verizon
+	DEVICE_MODEL := CR1000A
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	DEVICE_DTS_CONFIG := config@verizon_cr1000a
+	SOC := ipq8072
+	DEVICE_PACKAGES := \
+		ipq-wifi-verizon_cr1000a kmod-ath11k-pci ath11k-firmware-qcn9074 \
+		kmod-ath11k-ahb ath11k-firmware-ipq8074 \
+		kmod-rtl930x-spi kmod-rtl930x-dsa kmod-rtl930x-regmap \
+		kmod-phy-mxl371x mxl-firmware-verizon-cr1000a \
+		kmod-leds-lp5562 kmod-leds-fan5646 i2c-tools \
+		ethtool ip-bridge tc-full kmod-sched-core kmod-sched kmod-sched-flower kmod-sched-act-police \
+		mdio-tools kmod-mdio-netlink cr1000a-diag \
+		luci luci-app-moca luci-theme-argon luci-app-argon-config \
+		block-mount kmod-usb-storage kmod-usb-storage-uas \
+		cryptsetup kmod-dm parted \
+		e2fsprogs kmod-fs-ext4 kmod-fs-f2fs f2fs-tools
+endef
+TARGET_DEVICES += verizon_cr1000a
+
 define Device/compex_wpq873
 	$(call Device/FitImage)
 	$(call Device/UbiFit)

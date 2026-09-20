@@ -1,0 +1,13 @@
+. /lib/functions.sh
+
+board=$(board_name)
+
+case "$board" in
+verizon,cr1000a)
+	# RTL9303 MDB offload prunes registered groups in hardware
+	uci set network.@device[0].igmp_snooping='1'
+	uci commit network
+	;;
+esac
+
+exit 0

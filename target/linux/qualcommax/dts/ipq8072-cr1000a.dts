@@ -1,0 +1,873 @@
+/dts-v1/;
+
+/*
+ * Verizon CR1000A — full profile.
+ *
+ * IPQ8072 SoC with both ath11k radios (2.4/5 GHz on-SoC + 6 GHz QCN9074 over
+ * PCIe), the IPQ-side AQR113C 10G "WAN" RJ45 (ESS port 6), and an SPI-attached RTL9303
+ * switch (ESS port 5, 10GBase-R CPU link) that fans out the four LAN ports plus the
+ * MXL3711 MoCA 2.5G link:
+ *
+ *   ESS port 6 -> AQR113C            : 10G "WAN" RJ45                 (label "wan")
+ *   ESS port 5 -> RTL9303 port 27    : 10GBase-R CPU uplink to switch (label "lan")
+ *     RTL9303 port 8  -> AQR113C #2  : 10G LAN RJ45            (label "lan10g")
+ *     RTL9303 port 20 -> RTL8221B    : 2.5G LAN, casing "LAN2" (label "lan2")
+ *     RTL9303 port 24 -> RTL8221B    : 2.5G LAN, casing "LAN1" (label "lan1")
+ *     RTL9303 port 25 -> MXL3711     : MoCA 2.5G (HSGMII)      (label "moca")
+ *
+ * The RTL9303 (kmod-rtl930x-spi DSA driver) and the MXL3711 MoCA PHY
+ * (kmod-phy-mxl371x) are out-of-tree; the front-panel LEDs use the in-tree
+ * leds-fan5646 (1-wire white) and leds-cr1000a-rgb (i2c 0x30) drivers.
+ */
+
+#include "ipq8074.dtsi"
+#include "ipq8074-hk-cpu.dtsi"
+#include "ipq8074-ess.dtsi"
+#include "pmp8074.dtsi"	/* pmp8074 PMIC on &spmi_bus: defines the s4 (vdd_s4) rail */
+
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/leds/common.h>
+
+/ {
+	model = "Verizon CR1000A";
+	compatible = "verizon,cr1000a", "qcom,ipq8074";
+
+	aliases {
+		sdhc1 = &sdhc_1;
+		serial0 = &blsp1_uart5;
+		label-mac-device = &ipq_lan;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	keys {
+		compatible = "gpio-keys";
+		pinctrl-0 = <&button_pins>;
+		pinctrl-names = "default";
+
+		reset {
+			debounce-interval = <0x3c>;
+			gpios = <&tlmm 0x2c GPIO_ACTIVE_LOW>;
+			label = "reset";
+			linux,code = <KEY_RESTART>;
+		};
+
+		wps {
+			debounce-interval = <0x3c>;
+			gpios = <&tlmm 0x2a GPIO_ACTIVE_LOW>;
+			label = "wps";
+			linux,code = <KEY_WPS_BUTTON>;
+		};
+	};
+
+	/*
+	 * IPQ8074 has no software-controlled PMIC for the USB PHY rails; they
+	 * are fixed always-on regulators on the board.
+	 */
+	reg_usb_vdd: regulator-usb-vdd {
+		compatible = "regulator-fixed";
+		regulator-name = "usb_vdd_0p9";
+		regulator-min-microvolt = <925000>;
+		regulator-max-microvolt = <925000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	reg_usb_vdda_pll: regulator-usb-vdda-pll {
+		compatible = "regulator-fixed";
+		regulator-name = "usb_vdda_1p8";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	reg_usb_vdda_dpdm: regulator-usb-vdda-dpdm {
+		compatible = "regulator-fixed";
+		regulator-name = "usb_vdda_3p3";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+&soc {
+	/*
+	 * Front-panel LED power rail. GPIO58 (enable-active-high) gates the
+	 * supply for BOTH the fan5646 white channel and the i2c 0x30 RGB chip.
+	 * The OEM asserts GPIO58 in U-Boot (so its boot LED lights before
+	 * Linux); model it as a regulator so Linux powers the rail at boot
+	 * regardless of the bootloader.  regulator-always-on keeps the RGB
+	 * powered independent of the fan5646 (white) brightness, since the
+	 * fan5646 driver enables/disables this same supply on brightness changes.
+	 */
+	fan5646_vreg: fan5646_vreg {
+		compatible = "regulator-fixed";
+		regulator-name = "fan5646_vreg";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&tlmm 58 0>;
+		enable-active-high;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	fan5646 {
+		status = "okay";
+		compatible = "fsi,leds-fan5646";
+		linux-name = "white";
+		gpios = <&tlmm 0x1d 0x2>; /* COMM GPIO, GPIOF_DIR_OUT | GPIOF_INIT_HIGH */
+		full-current = <0xc0>; /* 20 mA (ISET=0xC0); brightness scales down from this cap */
+		tsleep = <3>; /* short 1-wire phase (us); long phase = 3*tsleep (3/9us) */
+		fan5646-supply = <&fan5646_vreg>;
+		default-state = "on"; /* solid white at boot = unit powered (override via uci) */
+	};
+};
+
+&blsp1_i2c3 {
+	status = "okay";
+	pinctrl-0 = <&i2c_2_pins>;
+	pinctrl-names = "default";
+
+	/*
+	 * Front-panel status LED — TI LP5562 RGBW driver (the OEM "Router
+	 * Status LED": white=boot, blue=ready, red=fault, etc.).  The R/G/B
+	 * dies are driven here; the shared white die is driven by the fan5646
+	 * 1-wire channel above.  The chip powers up with CHIP_EN clear, so it
+	 * stays dark until this driver enables it.
+	 */
+	led-controller@30 {
+		compatible = "ti,lp5562";
+		reg = <0x30>;
+		clock-mode = /bits/ 8 <1>; /* internal clock */
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/*
+		 * Single RGB multicolor LED: one /sys/class/leds entry with a
+		 * multi_intensity colour mix (needs the lp5562
+		 * multicolor_brightness_fn from patch 0923; without it a
+		 * multi-led node oopses the kernel).  The shared white die is
+		 * driven by the fan5646 1-wire channel.  Channel reg = LP5562
+		 * output: 0 = red (PWM 0x04), 1 = green (0x03), 2 = blue (0x02).
+		 */
+		multi-led@0 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0x0>;
+			color = <LED_COLOR_ID_RGB>;
+			function = LED_FUNCTION_STATUS;
+
+			led@0 {
+				reg = <0x0>;
+				color = <LED_COLOR_ID_RED>;
+				led-cur = /bits/ 8 <0xaf>;
+				max-cur = /bits/ 8 <0xff>;
+			};
+			led@1 {
+				reg = <0x1>;
+				color = <LED_COLOR_ID_GREEN>;
+				led-cur = /bits/ 8 <0xaf>;
+				max-cur = /bits/ 8 <0xff>;
+			};
+			led@2 {
+				reg = <0x2>;
+				color = <LED_COLOR_ID_BLUE>;
+				led-cur = /bits/ 8 <0xaf>;
+				max-cur = /bits/ 8 <0xff>;
+			};
+		};
+
+		/*
+		 * Mono-colour view of the SAME three dies, registered in
+		 * parallel with the multi-led above.  The multi-led keeps the
+		 * OEM status-lamp semantics (one entry, multi_intensity colour
+		 * mix); these three give each die its own /sys/class/leds entry
+		 * so an ordinary netdev trigger can drive it -- which a
+		 * multicolor classdev cannot do.
+		 *
+		 * Both views write the same LP5562 PWM registers (reg = the
+		 * output index, identical to the multi-led sub-nodes), so they
+		 * are ALTERNATIVES: whichever wrote last owns the die.  Drive
+		 * one view or the other, not both.
+		 *
+		 * chan-name is what lp55xx uses verbatim for the classdev name
+		 * (leds-lp55xx-common.c lp55xx_init_led); without it the name
+		 * would fall back to "<client>:channel<N>".  Do NOT add a
+		 * chan-name to the multi-led node -- that would rename the
+		 * existing status LED.
+		 *
+		 * led-cur is mandatory here: lp55xx_init_led silently SKIPS a
+		 * logical LED whose led_current is 0.
+		 *
+		 * These four children are also the limit: lp5562 max_channel is
+		 * 4, and lp55xx registers one logical LED per child node.
+		 */
+		led@0 {
+			reg = <0x0>;
+			chan-name = "red:wan";
+			color = <LED_COLOR_ID_RED>;
+			function = LED_FUNCTION_WAN;
+			led-cur = /bits/ 8 <0xaf>;
+			max-cur = /bits/ 8 <0xff>;
+		};
+
+		led@1 {
+			reg = <0x1>;
+			chan-name = "green:lan";
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_LAN;
+			led-cur = /bits/ 8 <0xaf>;
+			max-cur = /bits/ 8 <0xff>;
+		};
+
+		led@2 {
+			reg = <0x2>;
+			chan-name = "blue:wlan";
+			color = <LED_COLOR_ID_BLUE>;
+			function = LED_FUNCTION_WLAN;
+			led-cur = /bits/ 8 <0xaf>;
+			max-cur = /bits/ 8 <0xff>;
+		};
+	};
+};
+
+&blsp1_spi1 {
+	status = "okay";
+
+	m25p80@0 {
+		#address-cells = <0x01>;
+		#size-cells = <0x01>;
+		reg = <0x00>;
+		compatible = "n25q128a11", "jdec,spi-nor";
+		linux,modalias = "m25p80", "n25q128a11";
+		spi-max-frequency = <0x2faf080>;
+		use-default-sizes;
+	};
+};
+
+&blsp1_spi5 {
+	pinctrl-0 = <&spi_4_pins>;
+	pinctrl-names = "default";
+	status = "okay";
+
+	rtl9301: spi@0 {
+		compatible = "realtek,rtl9301-spi";
+		reg = <0x00>;
+		spi-max-frequency = <12000000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/*
+		 * RTL9303 DSA switch — probed by kmod-rtl930x-dsa once the SPI
+		 * regmap is live.  Port layout (from OEM init):
+		 *   8    : XGS uplink to AQR113C #2 (10G LAN, label "lan10g")
+		 *   20   : HSGMII 2.5G LAN, casing "LAN2" -> label "lan2" (RTL8221B)
+		 *   24   : HSGMII 2.5G LAN, casing "LAN1" -> label "lan1" (RTL8221B)
+		 *   25   : HSGMII uplink to MXL3711 (MoCA 2.5G)
+		 *   27   : CPU port -> IPQ8072 ESS port 5 via 10GBase-R
+		 *   28   : internal MIPS CPU bus (MIPS disabled on CR1000A; unused)
+		 */
+		switch@0 {
+			compatible = "realtek,rtl9301-switch", "realtek,otto-switch",
+				     "syscon";
+			reg = <0>;
+
+			ethernet-ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@8 {
+					reg = <8>;
+					label = "lan10g";
+					pcs-handle = <&serdes3 0>;
+					phy-handle = <&aqr_p8>;
+					/*
+					 * USXGMII (10G-SXGMII): the AQR113C
+					 * rate-adapts 5G/2.5G/1G clients in-band,
+					 * like the WAN AQR on the IPQ side -- no
+					 * per-rate host re-provisioning needed.
+					 */
+					phy-mode = "usxgmii";
+				};
+
+				port@20 {
+					reg = <20>;
+					label = "lan2";
+					pcs-handle = <&serdes5 0>;
+					phy-handle = <&rtl8221b_p20>;
+					phy-mode = "2500base-x";
+				};
+
+				port@24 {
+					reg = <24>;
+					label = "lan1";
+					pcs-handle = <&serdes6 0>;
+					phy-handle = <&rtl8221b_p24>;
+					phy-mode = "2500base-x";
+				};
+
+				port@25 {
+					reg = <25>;
+					label = "moca";
+					pcs-handle = <&serdes7 0>;
+					phy-handle = <&mxl3711>;
+					/*
+					 * The MXL3711 MoCA MAC speaks HSGMII (2.5G
+					 * SGMII), distinct from 2500BASE-X at the PCS
+					 * layer.  Both ends read this single standard
+					 * phy-mode: the switch brings its SerDes up in
+					 * HISGMII, the MXL PHY driver sets its MAC PCS
+					 * to match.  Matches the OEM (SDS7 = HISGMII).
+					 */
+					phy-mode = "hsgmii";
+				};
+
+				port@27 {
+					reg = <27>;
+					ethernet = <&ipq_lan>;
+					pcs-handle = <&serdes9 0>;
+					phy-mode = "10gbase-r";
+					/*
+					 * Boot straight into the 802.1Q-based
+					 * tagger: the PPE can parse (and RSS-
+					 * hash) the ctag, which the inline OTTO
+					 * tag defeats, and the ppe-flowtable
+					 * hardware NAT offload depends on it.
+					 */
+					dsa-tag-protocol = "rtl_otto-8021q";
+
+					fixed-link {
+						speed = <10000>;
+						full-duplex;
+					};
+				};
+			};
+
+			/*
+			 * RTL9303 SMI master, driven by the (backported) mainline
+			 * realtek,rtl9301-mdio controller over the switch syscon
+			 * regmap that kmod-rtl930x-spi registers.  PHYs sit at
+			 * their strapped MDIO addresses on the physical SMI buses;
+			 * the controller derives the switch-port mapping from the
+			 * phy-handles in ethernet-ports.
+			 *
+			 * The RTL8221B PHYs are managed in Clause-22 mode so the
+			 * realtek driver reaches their vendor (paged) registers;
+			 * the AQR113C bus runs Clause-45.
+			 */
+			mdio-controller {
+				compatible = "realtek,rtl9301-mdio", "realtek,otto-mdio";
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				mdio-bus@0 {
+					reg = <0>;
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					rtl8221b_p20: ethernet-phy@7 {
+						reg = <7>;
+						/* switch SDS5 is fixed 2500BASE-X */
+						realtek,host-2500base-x-fixed;
+					};
+				};
+
+				mdio-bus@1 {
+					reg = <1>;
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					rtl8221b_p24: ethernet-phy@3 {
+						reg = <3>;
+						/* switch SDS6 is fixed 2500BASE-X */
+						realtek,host-2500base-x-fixed;
+					};
+				};
+
+				mdio-bus@2 {
+					reg = <2>;
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					/*
+					 * AQR113C (10G LAN, switch port 8).  The
+					 * PHY runs its provisioned USXGMII system
+					 * interface and rate-adapts the copper
+					 * in-band; the switch lane follows via
+					 * phylink (port@8 phy-mode "usxgmii").
+					 */
+					aqr_p8: ethernet-phy@0 {
+						compatible = "ethernet-phy-ieee802.3-c45";
+						reg = <0>;
+					};
+				};
+			};
+
+			/*
+			 * SerDes register access as a Clause-45 MDIO bus
+			 * (mdio-realtek-otto-serdes), over the same switch
+			 * syscon regmap.  The PCS bring-up reads/writes the
+			 * SerDes pages through this bus.
+			 */
+			mdio-serdes {
+				compatible = "realtek,rtl9301-serdes-mdio",
+					     "realtek,otto-serdes-mdio";
+			};
+
+			/*
+			 * The RTL-Otto PCS drives the SerDes lanes; ports bind
+			 * to them via pcs-handle and phylink configures each
+			 * lane on link bring-up.
+			 *
+			 * Only the 10G AQR lane (SDS3) tolerates the loopback
+			 * RX calibration on this board; on the other lanes it
+			 * fails and wedges RX, so they opt out.
+			 */
+			pcs {
+				compatible = "realtek,rtl9301-pcs",
+					     "realtek,otto-pcs";
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				serdes3: serdes@3 {
+					reg = <3>;
+					#pcs-cells = <1>;
+				};
+				serdes5: serdes@5 {
+					reg = <5>;
+					#pcs-cells = <1>;
+					realtek,skip-rx-calibration;
+					/*
+					 * The RTL8221B host-side SerDes runs
+					 * clause-37 AN on its fixed 2500BASE-X
+					 * interface; keep the lane's AN enabled
+					 * (fiber page 0x02 BMCR bit 12) or the
+					 * two ends never sync and the linked
+					 * port forwards nothing.
+					 */
+					realtek,sds-regs-override =
+						<0x02 0x00 0x1000 0x1000>;
+				};
+				serdes6: serdes@6 {
+					reg = <6>;
+					#pcs-cells = <1>;
+					realtek,skip-rx-calibration;
+					realtek,sds-regs-override =
+						<0x02 0x00 0x1000 0x1000>;
+				};
+				serdes7: serdes@7 {
+					reg = <7>;
+					#pcs-cells = <1>;
+					realtek,skip-rx-calibration;
+					/*
+					 * The MXL3711 MoCA MAC is a fixed link
+					 * partner with no auto-negotiating PHY,
+					 * so the lane never asserts its own RX
+					 * signal-detect: force the analog RX
+					 * enable (page 0x00 reg 0x02 bit 8) or
+					 * the lane syncs but never receives.
+					 */
+					realtek,sds-regs-override =
+						<0x00 0x02 0x0100 0x0100>;
+				};
+				serdes9: serdes@9 {
+					reg = <9>;
+					#pcs-cells = <1>;
+					realtek,skip-rx-calibration;
+					/*
+					 * CPU uplink to the IPQ8072 ESS port 5 MAC
+					 * (10GBASE-R fiber on both ends):
+					 * select the 10G fiber media standard
+					 * (FIB page 0x02 reg 0x00: bit 13 set,
+					 * bit 6 clear) — the lane links without
+					 * it but never passes data.
+					 */
+					realtek,sds-regs-override =
+						<0x02 0x00 0x2040 0x2000>;
+				};
+			};
+		};
+	};
+};
+
+&blsp1_uart5 {
+	status = "okay";
+};
+
+&prng {
+	status = "okay";
+};
+
+&cryptobam {
+	status = "okay";
+};
+
+&crypto {
+	status = "okay";
+};
+
+&edma {
+	status = "okay";
+};
+
+&qpic_bam {
+	status = "okay";
+};
+
+&sdhc_1 {
+	status = "okay";
+};
+
+&tlmm {
+	mdio_pins: mdio-pins {
+		mdc {
+			pins = "gpio68";
+			function = "mdc";
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+
+		mdio {
+			pins = "gpio69";
+			function = "mdio";
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+	};
+
+	spi_4_pins: spi-4-pins {
+		pins = "gpio5", "gpio6", "gpio7", "gpio8";
+		function = "blsp4_spi0";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	i2c_2_pins: i2c-2-pins {
+		pins = "gpio46", "gpio47";
+		function = "blsp2_i2c";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	button_pins: button_pins {
+		wps_button {
+			pins = "gpio42";
+			function = "gpio";
+			drive-strength = <0x08>;
+			bias-pull-up;
+		};
+
+		reset_button {
+			pins = "gpio44";
+			function = "gpio";
+			drive-strength = <0x08>;
+			bias-pull-up;
+		};
+	};
+};
+
+&mdio {
+	status = "okay";
+	pinctrl-0 = <&mdio_pins>;
+	pinctrl-names = "default";
+	reset-gpios = <&tlmm 37 GPIO_ACTIVE_LOW>;
+
+	/* AQR113C on the physical "WAN" RJ45, reached on the SoC MDIO bus. */
+	aqr113c: ethernet-phy@8 {
+		compatible = "ethernet-phy-ieee802.3-c45";
+		reg = <0x08>;
+	};
+
+	/*
+	 * MXL3711 MoCA SoC on the SoC MDIO bus.  The MoCA<->switch link mode
+	 * comes from the RTL9303 port@25 phy-mode ("hsgmii").  SoC hardware
+	 * reset is TLMM GPIO 56, active-low; owned by the MDIO core and pulsed
+	 * via phy_device_reset() with the OEM 5ms/50ms timing.
+	 */
+	mxl3711: ethernet-phy@f {
+		reg = <0x0f>;
+		reset-gpios = <&tlmm 56 GPIO_ACTIVE_LOW>;
+		reset-assert-us = <5000>;
+		reset-deassert-us = <50000>;
+	};
+};
+
+&switch {
+	status = "okay";
+
+	pinctrl-names = "default";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/* CPU port, internal link to the EDMA */
+		port@0 {
+			reg = <0>;
+			ethernet = <&edma>;
+			phy-mode = "internal";
+
+			fixed-link {
+				speed = <1000>;
+				full-duplex;
+			};
+		};
+
+		/*
+		 * Port 5 -> RTL9303 CPU port 27, 10GBase-R over UNIPHY1.
+		 * No PHY on this link: it is switch-to-switch, so it is a
+		 * fixed link and the RTL9303 hangs its own DSA tree off this
+		 * user port (see the rtl9301 node's port@27 conduit).
+		 */
+		ipq_lan: port@5 {
+			reg = <5>;
+			label = "lan";
+			phy-mode = "10gbase-r";
+			pcs-handle = <&uniphy1 0>;
+
+			fixed-link {
+				speed = <10000>;
+				full-duplex;
+			};
+		};
+
+		/* Port 6 -> AQR113C, the physical 10G "WAN" RJ45 */
+		port@6 {
+			reg = <6>;
+			label = "wan";
+			phy-handle = <&aqr113c>;
+			phy-mode = "usxgmii";
+			managed = "in-band-status";
+			pcs-handle = <&uniphy2 0>;
+		};
+	};
+};
+
+&ssphy_0 {
+	status = "okay";
+	vdda-phy-supply = <&reg_usb_vdd>;
+	vdda-pll-supply = <&reg_usb_vdda_pll>;
+};
+
+&ssphy_1 {
+	status = "okay";
+	vdda-phy-supply = <&reg_usb_vdd>;
+	vdda-pll-supply = <&reg_usb_vdda_pll>;
+};
+
+&qusb_phy_0 {
+	status = "okay";
+	vdd-supply = <&reg_usb_vdd>;
+	vdda-pll-supply = <&reg_usb_vdda_pll>;
+	vdda-phy-dpdm-supply = <&reg_usb_vdda_dpdm>;
+};
+
+&qusb_phy_1 {
+	status = "okay";
+	vdd-supply = <&reg_usb_vdd>;
+	vdda-pll-supply = <&reg_usb_vdda_pll>;
+	vdda-phy-dpdm-supply = <&reg_usb_vdda_dpdm>;
+};
+
+&usb_0 {
+	status = "okay";
+};
+
+&usb_1 {
+	status = "okay";
+};
+
+&wifi {
+	status = "okay";
+	qcom,ath11k-calibration-variant = "Verizon-CR1000A";
+};
+
+&pcie0 {
+	status = "okay";
+	num-lanes = <2>;
+	perst-gpios = <&tlmm 61 GPIO_ACTIVE_LOW>;
+
+	pcie@0 {
+		wifi@0,0 {
+			status = "okay";
+
+			/* ath11k has no DT compatible for PCI cards */
+			compatible = "pci17cb,1104";
+			reg = <0x00010000 0 0 0 0>;
+
+			qcom,ath11k-calibration-variant = "Verizon-CR1000A";
+		};
+	};
+};
+
+&pcie_qmp0 {
+	status = "okay";
+};
+
+/* PCIe1 carries no device on the CR1000A. */
+&pcie1 {
+	status = "disabled";
+};
+
+&pcie_qmp1 {
+	status = "disabled";
+};
+
+/*
+ * NSS subsystem (qca-nss-drv): bring up the 2x UBI32 cores via the real GPL
+ * driver. Nodes ported from qosmio ipq8074-nss.dtsi (the known-working 6.12
+ * reference). nss_region = the bootloader-reserved 0x40000000 16MB window;
+ * npu/mx rails are the dummy always-on reg (qosmio proves the cores boot with
+ * it - no CPR corner needed). The old cr1000a,nss-fw-loader node is removed:
+ * qca-nss-drv now owns the ubi0/ubi1 clocks.
+ */
+/ {
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		nss_region: nss@40000000 {
+			reg = <0x0 0x40000000 0x0 0x01000000>;
+			no-map;
+		};
+	};
+
+	nss_dummy_reg: nss-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "nss-reg";
+		regulator-min-microvolt = <848000>;
+		regulator-max-microvolt = <848000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+&soc {
+	nss-common {
+		compatible = "qcom,nss-common";
+		reg = <0x01868010 0x1000>;
+		reg-names = "nss-misc-reset";
+		memory-region = <&nss_region>;
+	};
+
+	nss0: nss@40000000 {
+		compatible = "qcom,nss";
+		interrupts = <GIC_SPI 377 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 378 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 379 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 380 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 381 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 382 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 383 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 384 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 385 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 386 IRQ_TYPE_EDGE_RISING>;
+		reg = <0x39000000 0x1000>,
+		      <0x38000000 0x30000>,
+		      <0x0b111000 0x1000>;
+		reg-names = "nphys", "vphys", "qgic-phys";
+		clocks = <&gcc GCC_NSS_NOC_CLK>,
+			 <&gcc GCC_NSS_PTP_REF_CLK>,
+			 <&gcc GCC_NSS_CSR_CLK>,
+			 <&gcc GCC_NSS_CFG_CLK>,
+			 <&gcc GCC_NSS_IMEM_CLK>,
+			 <&gcc GCC_NSSNOC_QOSGEN_REF_CLK>,
+			 <&gcc GCC_MEM_NOC_NSS_AXI_CLK>,
+			 <&gcc GCC_NSSNOC_SNOC_CLK>,
+			 <&gcc GCC_NSSNOC_TIMEOUT_REF_CLK>,
+			 <&gcc GCC_NSS_CE_AXI_CLK>,
+			 <&gcc GCC_NSS_CE_APB_CLK>,
+			 <&gcc GCC_NSSNOC_CE_AXI_CLK>,
+			 <&gcc GCC_NSSNOC_CE_APB_CLK>,
+			 <&gcc GCC_NSSNOC_UBI0_AHB_CLK>,
+			 <&gcc GCC_UBI0_CORE_CLK>,
+			 <&gcc GCC_UBI0_AHB_CLK>,
+			 <&gcc GCC_UBI0_AXI_CLK>,
+			 <&gcc GCC_UBI0_MPT_CLK>,
+			 <&gcc GCC_UBI0_NC_AXI_CLK>;
+		clock-names = "nss-noc-clk", "nss-ptp-ref-clk", "nss-csr-clk",
+			      "nss-cfg-clk", "nss-imem-clk",
+			      "nss-nssnoc-qosgen-ref-clk",
+			      "nss-mem-noc-nss-axi-clk", "nss-nssnoc-snoc-clk",
+			      "nss-nssnoc-timeout-ref-clk", "nss-ce-axi-clk",
+			      "nss-ce-apb-clk", "nss-nssnoc-ce-axi-clk",
+			      "nss-nssnoc-ce-apb-clk", "nss-nssnoc-ahb-clk",
+			      "nss-core-clk", "nss-ahb-clk", "nss-axi-clk",
+			      "nss-mpt-clk", "nss-nc-axi-clk";
+		qcom,id = <0>;
+		qcom,num-queue = <4>;
+		qcom,num-irq = <10>;
+		qcom,num-pri = <4>;
+		qcom,load-addr = <0x40000000>;
+		qcom,low-frequency = <187200000>;
+		qcom,mid-frequency = <748800000>;
+		qcom,max-frequency = <1689600000>;
+		qcom,bridge-enabled;
+		qcom,ipv4-enabled;
+		qcom,ipv6-enabled;
+		qcom,ppe-enabled;
+		mx-supply = <&nss_dummy_reg>;
+		npu-supply = <&nss_dummy_reg>;
+		vdd_s4-supply = <&s4>;
+	};
+
+	nss1: nss@40800000 {
+		compatible = "qcom,nss";
+		interrupts = <GIC_SPI 390 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 391 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 392 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 393 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 394 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 395 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 396 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 397 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 398 IRQ_TYPE_EDGE_RISING>;
+		reg = <0x39400000 0x1000>,
+		      <0x38030000 0x30000>,
+		      <0x0b111000 0x1000>;
+		reg-names = "nphys", "vphys", "qgic-phys";
+		clocks = <&gcc GCC_NSS_NOC_CLK>,
+			 <&gcc GCC_NSS_PTP_REF_CLK>,
+			 <&gcc GCC_NSS_CSR_CLK>,
+			 <&gcc GCC_NSS_CFG_CLK>,
+			 <&gcc GCC_NSS_IMEM_CLK>,
+			 <&gcc GCC_NSSNOC_QOSGEN_REF_CLK>,
+			 <&gcc GCC_MEM_NOC_NSS_AXI_CLK>,
+			 <&gcc GCC_NSSNOC_SNOC_CLK>,
+			 <&gcc GCC_NSSNOC_TIMEOUT_REF_CLK>,
+			 <&gcc GCC_NSS_CE_AXI_CLK>,
+			 <&gcc GCC_NSS_CE_APB_CLK>,
+			 <&gcc GCC_NSSNOC_CE_AXI_CLK>,
+			 <&gcc GCC_NSSNOC_CE_APB_CLK>,
+			 <&gcc GCC_NSSNOC_UBI1_AHB_CLK>,
+			 <&gcc GCC_UBI1_CORE_CLK>,
+			 <&gcc GCC_UBI1_AHB_CLK>,
+			 <&gcc GCC_UBI1_AXI_CLK>,
+			 <&gcc GCC_UBI1_MPT_CLK>,
+			 <&gcc GCC_UBI1_NC_AXI_CLK>;
+		clock-names = "nss-noc-clk", "nss-ptp-ref-clk", "nss-csr-clk",
+			      "nss-cfg-clk", "nss-imem-clk",
+			      "nss-nssnoc-qosgen-ref-clk",
+			      "nss-mem-noc-nss-axi-clk", "nss-nssnoc-snoc-clk",
+			      "nss-nssnoc-timeout-ref-clk", "nss-ce-axi-clk",
+			      "nss-ce-apb-clk", "nss-nssnoc-ce-axi-clk",
+			      "nss-nssnoc-ce-apb-clk", "nss-nssnoc-ahb-clk",
+			      "nss-core-clk", "nss-ahb-clk", "nss-axi-clk",
+			      "nss-mpt-clk", "nss-nc-axi-clk";
+		qcom,id = <1>;
+		qcom,num-queue = <4>;
+		qcom,num-irq = <9>;
+		qcom,num-pri = <4>;
+		qcom,load-addr = <0x40800000>;
+		mx-supply = <&nss_dummy_reg>;
+		npu-supply = <&nss_dummy_reg>;
+		vdd_s4-supply = <&s4>;
+	};
+
+};

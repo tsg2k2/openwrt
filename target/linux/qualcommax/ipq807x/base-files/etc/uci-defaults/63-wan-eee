@@ -1,0 +1,31 @@
+. /lib/functions.sh
+
+board=$(board_name)
+
+case "$board" in
+verizon,cr1000a)
+	# Enable 802.3az EEE on the WAN AQR113C. The LAN/copper ports default
+	# EEE on through the rtl930x DSA driver, but the nss-dp WAN port needs
+	# the PHY's line-side advertisement poked via ethtool (nss_dp_set_eee
+	# now drives phy_ethtool_set_eee for this). The aquantia driver sets
+	# the AQR's system-side EEE (VEND1_GLOBAL_CFG bit 9) at config_init so
+	# the receive direction does not wedge once EEE negotiates. Power
+	# saving on the hot 10G PHY when idle; harmless if the WAN partner
+	# does not advertise EEE.
+	#
+	# Detached + polled: the WAN link comes up several seconds into boot,
+	# and setsid keeps the wait alive past the uci-defaults runner.
+	command -v ethtool >/dev/null && setsid sh -c '
+		i=0
+		while [ $i -lt 120 ]; do
+			if ethtool wan 2>/dev/null | grep -q "Link detected: yes"; then
+				ethtool --set-eee wan eee on 2>/dev/null
+				exit 0
+			fi
+			i=$((i + 1))
+			sleep 1
+		done' >/dev/null 2>&1 &
+	;;
+esac
+
+exit 0

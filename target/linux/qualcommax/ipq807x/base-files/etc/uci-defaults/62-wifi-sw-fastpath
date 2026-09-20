@@ -1,0 +1,21 @@
+. /lib/functions.sh
+
+board=$(board_name)
+
+case "$board" in
+verizon,cr1000a)
+	# Companion to the hardware flowtable (61-flowtable-offload):
+	# render a software-only flowtable for the wlan interfaces on
+	# every firewall reload, so wifi traffic gets the kernel
+	# fastpath while wired flows stay in the PPE. Wifi interface
+	# hotplug re-renders it via /etc/hotplug.d/net.
+	uci -q delete firewall.wifi_sw_fastpath
+	uci set firewall.wifi_sw_fastpath=include
+	uci set firewall.wifi_sw_fastpath.type='script'
+	uci set firewall.wifi_sw_fastpath.path='/usr/libexec/wifi-sw-fastpath.sh'
+	uci set firewall.wifi_sw_fastpath.fw4_compatible='1'
+	uci commit firewall
+	;;
+esac
+
+exit 0

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Default storage behaviour for the Verizon CR1000A: automount hotplugged
+# (USB) filesystems.  Runs after block-mount's own 10-fstab uci-default has
+# generated /etc/config/fstab via `block detect` (which defaults anon_mount
+# to 0), so just flip the automount options.
+
+. /lib/functions.sh
+
+[ "$(board_name)" = "verizon,cr1000a" ] || exit 0
+
+[ -f /etc/config/fstab ] || /sbin/block detect > /etc/config/fstab
+uci -q get fstab.@global[0] >/dev/null || uci -q add fstab global
+uci -q batch <<-EOF
+	set fstab.@global[0].anon_mount='1'
+	set fstab.@global[0].auto_mount='1'
+	set fstab.@global[0].auto_swap='1'
+	commit fstab
+EOF
+
+exit 0

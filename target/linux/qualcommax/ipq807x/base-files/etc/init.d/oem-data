@@ -1,0 +1,59 @@
+#!/bin/sh /etc/rc.common
+# Unlock and mount the Verizon CR1000A's LUKS-encrypted OEM "data" eMMC
+# partition.  The unlock key ships in the OEM firmware (not in this image);
+# place it at /lib/mmc/data_key -- without it this script is a no-op.
+
+START=99
+STOP=10
+
+KEYFILE=/lib/mmc/data_key
+MAPPER=data
+MOUNTPOINT=/mnt/data
+
+data_partdev() {
+	local dev
+	for dev in /sys/block/mmcblk0/mmcblk0p*; do
+		if grep -qw "PARTNAME=data" "$dev/uevent" 2>/dev/null; then
+			echo "${dev##*/}"
+			return 0
+		fi
+	done
+	return 1
+}
+
+unlock_and_mount() {
+	local part="$1" i
+
+	# dm-crypt and the LUKS cipher stack (aes/xts/...) are modules loaded
+	# late in boot by kmodloader; poll until the unlock goes through.
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+		modprobe dm-crypt >/dev/null 2>&1
+		cryptsetup --key-file="$KEYFILE" luksOpen "/dev/$part" "$MAPPER" >/dev/null 2>&1 && break
+		[ "$i" = 12 ] && {
+			logger -t oem-data "failed to unlock /dev/$part"
+			return 1
+		}
+		sleep 5
+	done
+
+	mkdir -p "$MOUNTPOINT"
+	mount "/dev/mapper/$MAPPER" "$MOUNTPOINT" || logger -t oem-data "mount of /dev/mapper/$MAPPER failed"
+}
+
+start() {
+	local part
+
+	. /lib/functions.sh
+	[ "$(board_name)" = "verizon,cr1000a" ] || return 0
+	[ -f "$KEYFILE" ] || return 0
+	[ -e "/dev/mapper/$MAPPER" ] && return 0
+
+	part=$(data_partdev) || return 0
+	unlock_and_mount "$part" &
+}
+
+stop() {
+	[ -e "/dev/mapper/$MAPPER" ] || return 0
+	umount "$MOUNTPOINT" 2>/dev/null
+	cryptsetup luksClose "$MAPPER"
+}

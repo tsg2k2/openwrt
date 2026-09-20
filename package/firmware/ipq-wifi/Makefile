@@ -5,10 +5,13 @@ PKG_NAME:=ipq-wifi
 PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL=$(PROJECT_GIT)/project/firmware/qca-wireless.git
-PKG_SOURCE_DATE:=2026-09-10
-PKG_SOURCE_VERSION:=04dff0ab979f153a4605095b5e449a9ac5494a17
-PKG_MIRROR_HASH:=b5ddee6924921861fbb20e2e46c965794e7e12908364141330ff01bc4bdbaa72
+# LOCAL-ONLY OVERRIDE (do not commit): the board-verizon_cr1000a.* files are not
+# yet in upstream qca-wireless, so point at a fork that carries them on top of
+# e20f4c6 (2026-05-18). Revert this hunk before committing/upstreaming.
+PKG_SOURCE_URL=https://github.com/tsg2k2/firmware_qca-wireless.git
+PKG_SOURCE_DATE:=2026-06-03
+PKG_SOURCE_VERSION:=dc633b81912ffe9efb2d52cb89e2017ab64d713c
+PKG_MIRROR_HASH:=fe240c0660b414a5762c5c74ca9387f7a86ef636da4db200eefb2957f20815e1
 PKG_FLAGS:=nonshared
 
 include $(INCLUDE_DIR)/package.mk
@@ -107,6 +110,7 @@ ALLWIFIBOARDS:= \
 	tplink_eap660hd-v1 \
 	tplink_tl-wa1201-v2 \
 	ubnt_utr \
+	verizon_cr1000a \
 	wallys_dr40x9 \
 	xiaomi_aiot-ac2350 \
 	xiaomi_ax3600 \
@@ -310,6 +314,7 @@ $(eval $(call generate-ipq-wifi-package,tplink_eap625-outdoor-hd-v1,TP-Link EAP6
 $(eval $(call generate-ipq-wifi-package,tplink_eap660hd-v1,TP-Link EAP660 HD v1))
 $(eval $(call generate-ipq-wifi-package,tplink_tl-wa1201-v2,TP-Link TL-WA1201 V2))
 $(eval $(call generate-ipq-wifi-package,ubnt_utr,Ubiquiti UniFi Travel Router))
+$(eval $(call generate-ipq-wifi-package,verizon_cr1000a,Verizon CR1000A))
 $(eval $(call generate-ipq-wifi-package,wallys_dr40x9,Wallys DR40X9))
 $(eval $(call generate-ipq-wifi-package,xiaomi_aiot-ac2350,Xiaomi AIoT AC2350))
 $(eval $(call generate-ipq-wifi-package,xiaomi_ax3600,Xiaomi AX3600))

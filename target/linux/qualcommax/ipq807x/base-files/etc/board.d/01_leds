@@ -45,6 +45,24 @@ redmi,ax6)
 tcl,linkhub-hh500v)
 	ucidef_set_led_wlan "wlan5g" "WiFi 5GHz" "blue:wlan" "phy0radio"
 	;;
+verizon,cr1000a)
+	# One physical front-panel lamp, three dies.  The mono view of the
+	# LP5562 channels (DTS led@0..2) lets each die take its own netdev
+	# trigger; the multicolor view of the same dies stays available for
+	# status scripts, but only ONE view should drive the lamp at a time.
+	#
+	# "lan" is dp5, the DSA conduit every wired LAN port funnels through,
+	# so green covers lan1/lan2/lan10g/moca without lighting on wifi->wan
+	# traffic.  "wan" is dp6, the 10G RJ45.
+	ucidef_set_led_netdev "wan" "WAN" "red:wan" "wan" "link tx rx"
+	ucidef_set_led_netdev "lan" "LAN" "green:lan" "lan" "link tx rx"
+	# All radios, not just one: the netdev trigger takes a set of devices
+	# (kernel patch 835), and "phy*-ap*" globs every AP interface on every
+	# phy -- 2.4/5/6 GHz, plus any extra BSS.  Members join as they are
+	# created, so it still works when wifi comes up long after boot.
+	# Use "phy*" instead if STA/mesh interfaces should blink it too.
+	ucidef_set_led_netdev "wlan" "WLAN" "blue:wlan" "phy*-ap*" "link tx rx"
+	;;
 xiaomi,ax3600)
 	ucidef_set_led_netdev "wan-port-link" "WAN-PORT-LINK" "90000.mdio-1:01:green:wan" "wan" "tx rx link_10 link_100 link_1000"
 	ucidef_set_led_netdev "lan1-port-link" "LAN1-PORT-LINK" "90000.mdio-1:02:green:lan" "lan1" "tx rx link_10 link_100 link_1000"
