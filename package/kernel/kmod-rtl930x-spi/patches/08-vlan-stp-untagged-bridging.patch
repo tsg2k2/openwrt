@@ -37,7 +37,7 @@ CPU-port SA/DA-block clear.
  	rtldsa_stats_init(priv);
 --- a/vlan.c
 +++ b/vlan.c
-@@ -171,6 +171,16 @@
+@@ -172,6 +172,16 @@
  	 * on the CPU port -- end devices and the CPU interface discard it. */
  	priv->r->vlan_set_untagged(0, info.member_ports);
  
@@ -54,3 +54,19 @@ CPU-port SA/DA-block clear.
  	/* Bridge does not call vlan_add with PVID for the CPU port, so set it here */
  	rtldsa_vlan_set_pvid(priv, priv->r->cpu_port, 1);
  
+@@ -878,10 +888,11 @@
+ 	info.member_ports |= BIT_ULL(port);
+ 	if (port != priv->r->cpu_port)
+ 		info.member_ports |= BIT_ULL(priv->r->cpu_port);
+-	if (vlan->flags & BRIDGE_VLAN_INFO_UNTAGGED)
+-		info.untagged_ports |= BIT_ULL(port);
+-	else
+-		info.untagged_ports &= ~BIT_ULL(port);
++	/* External-SPI mode: the CPU port is a plain Ethernet link with no
++	 * CPU-tag mechanism, so every member port must egress untagged or the
++	 * attached device receives 802.1Q-tagged frames it never asked for.
++	 */
++	info.untagged_ports = info.member_ports;
+ 
+ 	priv->r->vlan_set_untagged(vlan->vid, info.untagged_ports);
+ 	pr_debug("Untagged ports, VLAN %d: %llx\n", vlan->vid, info.untagged_ports);
