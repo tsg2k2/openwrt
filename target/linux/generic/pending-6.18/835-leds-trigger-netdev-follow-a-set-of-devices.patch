@@ -1,0 +1,404 @@
+From: Yury Ilyanok <yuryster@gmail.com>
+Subject: [PATCH] leds: trigger: netdev: follow a set of devices, not just one
+
+The netdev trigger monitors exactly one interface, so an LED that is meant
+to mean "wifi" cannot be driven on a board with more than one radio: the
+AP interfaces are separate netdevs (phy0-ap0, phy1-ap0, phy2-ap0) and only
+one of them can own the LED.
+
+Let device_name hold a comma-separated list whose entries may be glob
+patterns, e.g. "phy*-ap*" or "lan1,lan2". The trigger then holds a set of
+devices and reports their union: link is on while ANY member has carrier,
+and tx/rx blink on the summed packet counters. The netdev notifier adds and
+drops members as they appear, are renamed, or go away, so a wifi interface
+that is created long after boot still joins the set.
+
+A single plain name is a glob pattern with no wildcards, so the existing
+single-device behaviour is unchanged, including the case where the LED is
+bound by hw control at activate time.
+
+Two details worth naming:
+
+ - hardware offload binds one netdev, so can_hw_control() now refuses a set
+   of any size other than one and the LED falls back to software blinking.
+
+ - get_device_state() tests IFF_UP as well as carrier. NETDEV_DOWN is
+   delivered after IFF_UP is cleared, so a member that just went down drops
+   out of the union on its own and the remaining members keep the LED
+   alive. For a single device this reproduces the previous "down means off"
+   result without relying on the driver having dropped carrier itself.
+
+Signed-off-by: Yury Ilyanok <yuryster@gmail.com>
+---
+--- a/drivers/leds/trigger/ledtrig-netdev.c	2026-09-20 09:35:00.540259344 -0400
++++ b/drivers/leds/trigger/ledtrig-netdev.c	2026-09-20 09:35:03.410846860 -0400
+@@ -14,6 +14,7 @@
+ #include <linux/ctype.h>
+ #include <linux/device.h>
+ #include <linux/ethtool.h>
++#include <linux/glob.h>
+ #include <linux/init.h>
+ #include <linux/jiffies.h>
+ #include <linux/kernel.h>
+@@ -31,9 +32,23 @@
+ #define NETDEV_LED_DEFAULT_INTERVAL	50
+ 
+ /*
++ * A LED can follow a SET of devices, not just one: device_name is a
++ * comma-separated list whose entries may be glob patterns.  The cap is
++ * arbitrary but generous; a board that needs more devices than this on one
++ * LED wants a different indicator, not a bigger array.
++ */
++#define NETDEV_LED_MAX_DEVS		8
++#define NETDEV_LED_SPEC_LEN		128
++
++/*
+  * Configurable sysfs attributes:
+  *
+- * device_name - network device name to monitor
++ * device_name - network device(s) to monitor.  A comma-separated list whose
++ *         entries are interface names or glob patterns, e.g. "phy*-ap*" or
++ *         "lan1,lan2".  A single plain name behaves exactly as before.
++ *         Across a set the LED shows the union: link is on while ANY member
++ *         has carrier, and tx/rx blink on the summed counters.  Hardware
++ *         offload is per-netdev, so a set always blinks in software.
+  * interval - duration of LED blink, in milliseconds
+  * link -  LED's normal state reflects whether the link is up
+  *         (has carrier) or not
+@@ -61,9 +76,10 @@
+ 	struct notifier_block notifier;
+ 
+ 	struct led_classdev *led_cdev;
+-	struct net_device *net_dev;
++	struct net_device *net_devs[NETDEV_LED_MAX_DEVS];
++	int num_devs;
+ 
+-	char device_name[IFNAMSIZ];
++	char device_name[NETDEV_LED_SPEC_LEN];
+ 	atomic_t interval;
+ 	unsigned int last_activity;
+ 
+@@ -78,6 +94,86 @@
+ 
+ static const struct attribute_group netdev_trig_link_speed_attrs_group;
+ 
++/*
++ * Does @name match the configured spec?  The spec is a comma-separated list of
++ * glob patterns; a pattern without wildcards is just an exact name, which is
++ * what keeps the single-device case behaving as it always did.
++ */
++static bool netdev_trig_name_matches(const char *spec, const char *name)
++{
++	const char *p = spec;
++
++	while (*p) {
++		const char *end = strchrnul(p, ',');
++		size_t len = end - p;
++		char pattern[IFNAMSIZ];
++
++		if (len && len < sizeof(pattern)) {
++			memcpy(pattern, p, len);
++			pattern[len] = '\0';
++			if (glob_match(pattern, name))
++				return true;
++		}
++
++		p = *end ? end + 1 : end;
++	}
++
++	return false;
++}
++
++static bool netdev_trig_holds_dev(struct led_netdev_data *trigger_data,
++				  struct net_device *dev)
++{
++	int i;
++
++	for (i = 0; i < trigger_data->num_devs; i++)
++		if (trigger_data->net_devs[i] == dev)
++			return true;
++
++	return false;
++}
++
++static void netdev_trig_add_dev(struct led_netdev_data *trigger_data,
++				struct net_device *dev)
++{
++	if (trigger_data->num_devs == NETDEV_LED_MAX_DEVS ||
++	    netdev_trig_holds_dev(trigger_data, dev))
++		return;
++
++	dev_hold(dev);
++	trigger_data->net_devs[trigger_data->num_devs++] = dev;
++}
++
++static void netdev_trig_del_dev(struct led_netdev_data *trigger_data,
++				struct net_device *dev)
++{
++	int i;
++
++	for (i = 0; i < trigger_data->num_devs; i++) {
++		if (trigger_data->net_devs[i] != dev)
++			continue;
++
++		dev_put(dev);
++		trigger_data->num_devs--;
++		trigger_data->net_devs[i] =
++			trigger_data->net_devs[trigger_data->num_devs];
++		trigger_data->net_devs[trigger_data->num_devs] = NULL;
++		return;
++	}
++}
++
++static void netdev_trig_put_devs(struct led_netdev_data *trigger_data)
++{
++	int i;
++
++	for (i = 0; i < trigger_data->num_devs; i++) {
++		dev_put(trigger_data->net_devs[i]);
++		trigger_data->net_devs[i] = NULL;
++	}
++
++	trigger_data->num_devs = 0;
++}
++
+ static void set_baseline_state(struct led_netdev_data *trigger_data)
+ {
+ 	int current_brightness;
+@@ -203,9 +299,13 @@
+ 	 * blinking can be happening and there is nothing to
+ 	 * offloaded. Additionally, for hw control to be
+ 	 * valid, the configured netdev must be the same as
+-	 * netdev associated to the LED.
++	 * netdev associated to the LED.  Offload binds one netdev, so a set of
++	 * devices can only ever be blinked in software.
+ 	 */
+-	if (!validate_net_dev(led_cdev, trigger_data->net_dev))
++	if (trigger_data->num_devs != 1)
++		return false;
++
++	if (!validate_net_dev(led_cdev, trigger_data->net_devs[0]))
+ 		return false;
+ 
+ 	/* Check if the requested mode is supported */
+@@ -225,10 +325,32 @@
+ static void get_device_state(struct led_netdev_data *trigger_data)
+ {
+ 	struct ethtool_link_ksettings cmd;
++	int i;
++
++	/*
++	 * Link is the union over the set.  IFF_UP is tested as well as carrier
++	 * so a member that has just gone down stops contributing: NETDEV_DOWN
++	 * is delivered after IFF_UP is cleared, which for a single device
++	 * reproduces the old "down means off" result without relying on the
++	 * driver having dropped carrier itself.
++	 */
++	trigger_data->carrier_link_up = false;
++	for (i = 0; i < trigger_data->num_devs; i++) {
++		struct net_device *net_dev = trigger_data->net_devs[i];
++
++		if ((net_dev->flags & IFF_UP) && netif_carrier_ok(net_dev))
++			trigger_data->carrier_link_up = true;
++	}
+ 
+-	trigger_data->carrier_link_up = netif_carrier_ok(trigger_data->net_dev);
++	/*
++	 * Speed and duplex only mean something for a single device; across a
++	 * set they stay UNKNOWN, so the LINK_<speed> and <x>_DUPLEX modes
++	 * simply never match.
++	 */
++	if (trigger_data->num_devs != 1)
++		return;
+ 
+-	if (__ethtool_get_link_ksettings(trigger_data->net_dev, &cmd))
++	if (__ethtool_get_link_ksettings(trigger_data->net_devs[0], &cmd))
+ 		return;
+ 
+ 	if (trigger_data->carrier_link_up) {
+@@ -259,7 +381,9 @@
+ static int set_device_name(struct led_netdev_data *trigger_data,
+ 			   const char *name, size_t size)
+ {
+-	if (size >= IFNAMSIZ)
++	struct net_device *ndev;
++
++	if (size >= sizeof(trigger_data->device_name))
+ 		return -EINVAL;
+ 
+ 	cancel_delayed_work_sync(&trigger_data->work);
+@@ -271,24 +395,29 @@
+ 	rtnl_lock();
+ 	mutex_lock(&trigger_data->lock);
+ 
+-	if (trigger_data->net_dev) {
+-		dev_put(trigger_data->net_dev);
+-		trigger_data->net_dev = NULL;
+-	}
++	netdev_trig_put_devs(trigger_data);
+ 
+ 	memcpy(trigger_data->device_name, name, size);
+ 	trigger_data->device_name[size] = 0;
+ 	if (size > 0 && trigger_data->device_name[size - 1] == '\n')
+ 		trigger_data->device_name[size - 1] = 0;
+ 
+-	if (trigger_data->device_name[0] != 0)
+-		trigger_data->net_dev =
+-		    dev_get_by_name(&init_net, trigger_data->device_name);
++	/* RTNL is held, so the list is stable while it is walked. */
++	if (trigger_data->device_name[0] != 0) {
++		for_each_netdev(&init_net, ndev) {
++			if (trigger_data->num_devs == NETDEV_LED_MAX_DEVS)
++				break;
++
++			if (netdev_trig_name_matches(trigger_data->device_name,
++						     ndev->name))
++				netdev_trig_add_dev(trigger_data, ndev);
++		}
++	}
+ 
+ 	trigger_data->carrier_link_up = false;
+ 	trigger_data->link_speed = SPEED_UNKNOWN;
+ 	trigger_data->duplex = DUPLEX_UNKNOWN;
+-	if (trigger_data->net_dev)
++	if (trigger_data->num_devs)
+ 		get_device_state(trigger_data);
+ 
+ 	trigger_data->last_activity = 0;
+@@ -573,15 +702,18 @@
+ 	struct led_netdev_data *trigger_data =
+ 		container_of(nb, struct led_netdev_data, notifier);
+ 	struct led_classdev *led_cdev = trigger_data->led_cdev;
++	bool matches, held;
+ 
+ 	if (evt != NETDEV_UP && evt != NETDEV_DOWN && evt != NETDEV_CHANGE
+ 	    && evt != NETDEV_REGISTER && evt != NETDEV_UNREGISTER
+ 	    && evt != NETDEV_CHANGENAME)
+ 		return NOTIFY_DONE;
+ 
+-	if (!(dev == trigger_data->net_dev ||
+-	      (evt == NETDEV_CHANGENAME && !strcmp(dev->name, trigger_data->device_name)) ||
+-	      (evt == NETDEV_REGISTER && !strcmp(dev->name, trigger_data->device_name))))
++	held = netdev_trig_holds_dev(trigger_data, dev);
++	matches = netdev_trig_name_matches(trigger_data->device_name, dev->name);
++
++	if (!held && !((evt == NETDEV_CHANGENAME || evt == NETDEV_REGISTER) &&
++		       matches))
+ 		return NOTIFY_DONE;
+ 
+ 	cancel_delayed_work_sync(&trigger_data->work);
+@@ -593,29 +725,40 @@
+ 	trigger_data->duplex = DUPLEX_UNKNOWN;
+ 	switch (evt) {
+ 	case NETDEV_CHANGENAME:
++		/* a held device can be renamed out of the set, or into it */
++		if (matches)
++			netdev_trig_add_dev(trigger_data, dev);
++		else
++			netdev_trig_del_dev(trigger_data, dev);
++		break;
+ 	case NETDEV_REGISTER:
+-		dev_put(trigger_data->net_dev);
+-		dev_hold(dev);
+-		trigger_data->net_dev = dev;
+-		if (evt == NETDEV_CHANGENAME)
+-			get_device_state(trigger_data);
++		netdev_trig_add_dev(trigger_data, dev);
+ 		break;
+ 	case NETDEV_UNREGISTER:
+-		dev_put(trigger_data->net_dev);
+-		trigger_data->net_dev = NULL;
++		netdev_trig_del_dev(trigger_data, dev);
+ 		break;
+ 	case NETDEV_UP:
+ 		trigger_data->hw_control = can_hw_control(trigger_data);
+-		fallthrough;
++		break;
++	case NETDEV_DOWN:
+ 	case NETDEV_CHANGE:
+-		get_device_state(trigger_data);
+-		/* Refresh link_speed visibility */
+-		if (evt == NETDEV_CHANGE)
+-			sysfs_update_group(&led_cdev->dev->kobj,
+-					   &netdev_trig_link_speed_attrs_group);
+ 		break;
+ 	}
+ 
++	/*
++	 * Every event re-derives the union, membership changes included: a
++	 * member appearing or leaving must not black out an LED that other
++	 * members are still keeping lit.  For a single device this is what
++	 * the old per-event handling did, because a device that has just
++	 * registered is not IFF_UP and an unregistered one is gone.
++	 */
++	get_device_state(trigger_data);
++
++	/* Refresh link_speed visibility */
++	if (evt == NETDEV_CHANGE)
++		sysfs_update_group(&led_cdev->dev->kobj,
++				   &netdev_trig_link_speed_attrs_group);
++
+ 	set_baseline_state(trigger_data);
+ 
+ 	mutex_unlock(&trigger_data->lock);
+@@ -633,9 +776,10 @@
+ 	struct rtnl_link_stats64 temp;
+ 	unsigned long interval;
+ 	int invert;
++	int i;
+ 
+ 	/* If we dont have a device, insure we are off */
+-	if (!trigger_data->net_dev) {
++	if (!trigger_data->num_devs) {
+ 		led_set_brightness(trigger_data->led_cdev, LED_OFF);
+ 		return;
+ 	}
+@@ -647,16 +791,20 @@
+ 	    !test_bit(TRIGGER_NETDEV_RX_ERR, &trigger_data->mode))
+ 		return;
+ 
+-	dev_stats = dev_get_stats(trigger_data->net_dev, &temp);
+-	new_activity =
+-	    (test_bit(TRIGGER_NETDEV_TX, &trigger_data->mode) ?
+-		dev_stats->tx_packets : 0) +
+-	    (test_bit(TRIGGER_NETDEV_RX, &trigger_data->mode) ?
+-		dev_stats->rx_packets : 0) +
+-	    (test_bit(TRIGGER_NETDEV_TX_ERR, &trigger_data->mode) ?
+-		dev_stats->tx_errors : 0) +
+-	    (test_bit(TRIGGER_NETDEV_RX_ERR, &trigger_data->mode) ?
+-		dev_stats->rx_errors : 0);
++	/* Activity is the sum over the set, so any member blinks the LED. */
++	new_activity = 0;
++	for (i = 0; i < trigger_data->num_devs; i++) {
++		dev_stats = dev_get_stats(trigger_data->net_devs[i], &temp);
++		new_activity +=
++		    (test_bit(TRIGGER_NETDEV_TX, &trigger_data->mode) ?
++			dev_stats->tx_packets : 0) +
++		    (test_bit(TRIGGER_NETDEV_RX, &trigger_data->mode) ?
++			dev_stats->rx_packets : 0) +
++		    (test_bit(TRIGGER_NETDEV_TX_ERR, &trigger_data->mode) ?
++			dev_stats->tx_errors : 0) +
++		    (test_bit(TRIGGER_NETDEV_RX_ERR, &trigger_data->mode) ?
++			dev_stats->rx_errors : 0);
++	}
+ 
+ 	if (trigger_data->last_activity != new_activity) {
+ 		led_stop_software_blink(trigger_data->led_cdev);
+@@ -703,7 +851,7 @@
+ 	INIT_DELAYED_WORK(&trigger_data->work, netdev_trig_work);
+ 
+ 	trigger_data->led_cdev = led_cdev;
+-	trigger_data->net_dev = NULL;
++	trigger_data->num_devs = 0;
+ 	trigger_data->device_name[0] = 0;
+ 
+ 	trigger_data->mode = 0;
+@@ -744,7 +892,7 @@
+ 
+ 	cancel_delayed_work_sync(&trigger_data->work);
+ 
+-	dev_put(trigger_data->net_dev);
++	netdev_trig_put_devs(trigger_data);
+ 
+ 	kfree(trigger_data);
+ }

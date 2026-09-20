@@ -126,7 +126,10 @@ load_led() {
 
 		"netdev")
 			[ -n "$dev" ] && {
-				echo $dev > /sys/class/leds/${sysfs}/device_name
+				# quoted: a device_name may be a glob pattern
+				# ("phy*-ap*"), which unquoted would be eaten by
+				# pathname expansion
+				echo "$dev" > /sys/class/leds/${sysfs}/device_name
 				for m in $mode; do
 					[ -e "/sys/class/leds/${sysfs}/$m" ] && \
 						echo 1 > /sys/class/leds/${sysfs}/$m
