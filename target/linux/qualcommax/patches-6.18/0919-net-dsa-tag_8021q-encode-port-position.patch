@@ -1,0 +1,85 @@
+From: Yury Ilyanok <yury.ilyanok@gmail.com>
+Date: Wed, 11 Jun 2026 12:00:00 +0000
+Subject: net: dsa: tag_8021q: encode the port position instead of the index
+
+The 4-bit PORT field of the tag_8021q VID overflows on switches with
+sparse port numbering: the RTL9303 user ports 8 and 24 collide. Encode
+the port's ordinal position among its switch's user ports instead of
+the raw index. The position equals the index on switches whose user
+ports are densely numbered from zero, so existing users keep their
+VIDs bit-identical.
+
+Signed-off-by: Yury Ilyanok <yury.ilyanok@gmail.com>
+---
+--- a/net/dsa/tag_8021q.c
++++ b/net/dsa/tag_8021q.c
+@@ -86,13 +86,33 @@
+ }
+ EXPORT_SYMBOL_GPL(dsa_tag_8021q_bridge_vid);
+ 
++/* The PORT field of the VID is only 4 bits wide, which switches with sparse
++ * port numbering (e.g. user ports 8, 20, 24, 25) can exceed even when few
++ * ports are actually in use. Encode the port's ordinal position among its
++ * switch's user ports instead of the raw index. The position is stable (the
++ * number of user ports with a smaller index, independent of iteration order)
++ * and equals the index on switches whose user ports are densely numbered
++ * from 0, leaving their VIDs unchanged.
++ */
++static int dsa_tag_8021q_port_position(const struct dsa_port *dp)
++{
++	struct dsa_port *other;
++	int pos = 0;
++
++	dsa_switch_for_each_user_port(other, dp->ds)
++		if (other->index < dp->index)
++			pos++;
++
++	return pos;
++}
++
+ /* Returns the VID that will be installed as pvid for this switch port, sent as
+  * tagged egress towards the CPU port and decoded by the rcv function.
+  */
+ u16 dsa_tag_8021q_standalone_vid(const struct dsa_port *dp)
+ {
+ 	return DSA_8021Q_RSV | DSA_8021Q_SWITCH_ID(dp->ds->index) |
+-	       DSA_8021Q_PORT(dp->index);
++	       DSA_8021Q_PORT(dsa_tag_8021q_port_position(dp));
+ }
+ EXPORT_SYMBOL_GPL(dsa_tag_8021q_standalone_vid);
+ 
+@@ -499,13 +519,32 @@
+ 	return NULL;
+ }
+ 
++static struct net_device *
++dsa_tag_8021q_find_user_by_position(struct net_device *conduit,
++				    int switch_id, int position)
++{
++	struct dsa_port *cpu_dp = conduit->dsa_ptr;
++	struct dsa_port *dp;
++
++	dsa_tree_for_each_user_port(dp, cpu_dp->dst)
++		if (dp->ds->index == switch_id &&
++		    dsa_tag_8021q_port_position(dp) == position)
++			return dp->user;
++
++	return NULL;
++}
++
+ struct net_device *dsa_tag_8021q_find_user(struct net_device *conduit,
+ 					   int source_port, int switch_id,
+ 					   int vid, int vbid)
+ {
+-	/* Always prefer precise source port information, if available */
++	/* Always prefer precise source port information, if available.
++	 * The PORT field carries the port's position among its switch's
++	 * user ports, matching dsa_tag_8021q_standalone_vid().
++	 */
+ 	if (source_port != -1 && switch_id != -1)
+-		return dsa_conduit_find_user(conduit, switch_id, source_port);
++		return dsa_tag_8021q_find_user_by_position(conduit, switch_id,
++							   source_port);
+ 	else if (vbid >= 1)
+ 		return dsa_tag_8021q_find_port_by_vbid(conduit, vbid);
+ 

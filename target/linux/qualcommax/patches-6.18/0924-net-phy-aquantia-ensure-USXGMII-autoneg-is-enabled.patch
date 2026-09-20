@@ -1,0 +1,60 @@
+From: Yury Ilyanok <yuryster@gmail.com>
+Subject: [PATCH] net: phy: aquantia: ensure USXGMII autoneg is enabled on the
+ system interface
+
+The AQR113C firmware can come up with the USXGMII autoneg enable bit
+(PHY XS Vendor Provisioning 2, 4.0xC441 bit 3) cleared on the system
+interface.  When the host PCS runs standard USXGMII autoneg, the
+handshake then never completes and the system interface stays down
+(4.0xE812 "system interface ready" bit 0 reads 0) even though the line
+side trains and links fine - the port passes no traffic in either
+direction.
+
+Assert the bit from config_init() whenever the host interface is
+USXGMII.  config_init() runs again after PHY resets, so the setting
+also survives them.
+
+Signed-off-by: Yury Ilyanok <yuryster@gmail.com>
+---
+ drivers/net/phy/aquantia/aquantia.h      |  4 ++++
+ drivers/net/phy/aquantia/aquantia_main.c | 16 ++++++++++++++++
+ 2 files changed, 20 insertions(+)
+
+--- a/drivers/net/phy/aquantia/aquantia.h
++++ b/drivers/net/phy/aquantia/aquantia.h
+@@ -21,6 +21,10 @@
+ #define VEND1_GLOBAL_FW_ID_MAJOR		GENMASK(15, 8)
+ #define VEND1_GLOBAL_FW_ID_MINOR		GENMASK(7, 0)
+ 
++/* Vendor specific PHY XS, MDIO_MMD_PHYXS */
++#define MDIO_PHYXS_VEND_PROV2			0xc441
++#define MDIO_PHYXS_VEND_PROV2_USX_AN_EN		BIT(3)
++
+ #define VEND1_GLOBAL_MAILBOX_INTERFACE1			0x0200
+ #define VEND1_GLOBAL_MAILBOX_INTERFACE1_EXECUTE		BIT(15)
+ #define VEND1_GLOBAL_MAILBOX_INTERFACE1_WRITE		BIT(14)
+--- a/drivers/net/phy/aquantia/aquantia_main.c
++++ b/drivers/net/phy/aquantia/aquantia_main.c
+@@ -616,6 +616,22 @@
+ 		aqr107_chip_info(phydev);
+ 
+ 	/*
++	 * The firmware can come up with USXGMII autoneg disabled on the
++	 * system interface.  The host PCS then never completes the USXGMII
++	 * handshake and the system interface stays down even though the
++	 * line side links fine.  Re-assert the enable bit whenever the host
++	 * interface is USXGMII; config_init runs again after PHY resets, so
++	 * the bit also survives them.
++	 */
++	if (phydev->interface == PHY_INTERFACE_MODE_USXGMII) {
++		ret = phy_set_bits_mmd(phydev, MDIO_MMD_PHYXS,
++				       MDIO_PHYXS_VEND_PROV2,
++				       MDIO_PHYXS_VEND_PROV2_USX_AN_EN);
++		if (ret)
++			return ret;
++	}
++
++	/*
+ 	 * The board may declare that the host SerDes is fixed at 10GBASE-R
+ 	 * and cannot follow the firmware's USXGMII-style line-rate changes
+ 	 * for sub-10G clients.  Re-provision those rates to 10GBASE-R (XFI)

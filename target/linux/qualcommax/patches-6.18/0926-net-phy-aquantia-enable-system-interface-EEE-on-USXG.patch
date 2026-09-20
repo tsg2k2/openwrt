@@ -1,0 +1,66 @@
+net: phy: aquantia: enable system-interface EEE on USXGMII
+
+EEE on the line side is advertised through the standard 7.60 register,
+but the AQR113C's system (USXGMII) interface has a separate per-rate
+EEE enable in the VEND1 global config registers (bit 9 of
+VEND1_GLOBAL_CFG_<rate>). Without it the PHY enters line-side LPI that
+the host MAC never sees as EEE: the link stays up but the receive
+direction wedges completely once EEE is negotiated (validated on
+hardware - an EEE-capable 10GBASE-T partner links, the line trains,
+yet not a single frame reaches the switch until EEE is turned off).
+
+Set the per-rate system EEE enable from config_init whenever the host
+interface is USXGMII, alongside the existing USX autoneg fix. The bit
+is dormant until line-side EEE is actually advertised, so provisioning
+it unconditionally is safe; config_init re-runs after PHY resets so it
+survives them.
+
+Signed-off-by: Yury Ilyanok <yuryster@gmail.com>
+---
+--- a/drivers/net/phy/aquantia/aquantia.h	2026-06-12 22:07:36.013298600 -0400
++++ b/drivers/net/phy/aquantia/aquantia.h	2026-06-12 22:07:51.128261016 -0400
+@@ -63,6 +63,7 @@
+ #define VEND1_GLOBAL_CFG_RATE_ADAPT_NONE	0
+ #define VEND1_GLOBAL_CFG_RATE_ADAPT_USX		1
+ #define VEND1_GLOBAL_CFG_RATE_ADAPT_PAUSE	2
++#define VEND1_GLOBAL_CFG_EEE_EN			BIT(9)
+ 
+ /* Vendor specific 1, MDIO_MMD_VEND2 */
+ #define VEND1_GLOBAL_CONTROL2			0xc001
+--- a/drivers/net/phy/aquantia/aquantia_main.c	2026-06-12 22:07:36.012350960 -0400
++++ b/drivers/net/phy/aquantia/aquantia_main.c	2026-06-12 22:07:51.128359156 -0400
+@@ -632,6 +632,34 @@
+ 	}
+ 
+ 	/*
++	 * EEE on the line side is advertised through the standard 7.60
++	 * register, but the AQR's system interface has its own per-rate EEE
++	 * enable in the global config registers.  Without it the PHY enters
++	 * line-side LPI that the host MAC never sees as EEE, and the receive
++	 * direction wedges on a link that otherwise stays up.  Set the
++	 * per-rate system EEE enable so EEE, when negotiated, works in both
++	 * directions; the bit is dormant until line-side EEE is actually
++	 * advertised, so it is provisioned unconditionally - this also
++	 * covers the nss-dp-managed WAN AQR whose interface is not reported
++	 * as USXGMII to this driver.
++	 */
++	{
++		static const u16 eee_cfg[] = {
++			VEND1_GLOBAL_CFG_1G, VEND1_GLOBAL_CFG_2_5G,
++			VEND1_GLOBAL_CFG_5G, VEND1_GLOBAL_CFG_10G,
++		};
++		int i;
++
++		for (i = 0; i < ARRAY_SIZE(eee_cfg); i++) {
++			ret = phy_set_bits_mmd(phydev, MDIO_MMD_VEND1,
++					       eee_cfg[i],
++					       VEND1_GLOBAL_CFG_EEE_EN);
++			if (ret)
++				return ret;
++		}
++	}
++
++	/*
+ 	 * The board may declare that the host SerDes is fixed at 10GBASE-R
+ 	 * and cannot follow the firmware's USXGMII-style line-rate changes
+ 	 * for sub-10G clients.  Re-provision those rates to 10GBASE-R (XFI)

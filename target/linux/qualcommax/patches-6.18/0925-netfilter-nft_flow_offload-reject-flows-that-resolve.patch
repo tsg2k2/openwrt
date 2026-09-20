@@ -1,0 +1,106 @@
+From: Yury Ilyanok <yuryster@gmail.com>
+Subject: [PATCH] netfilter: nft_flow_offload: reject flows that resolve outside the flowtable
+
+When the forward path of a flow resolves through a bridge to a port the
+flowtable has no ingress hook on (e.g. a wireless interface while the
+flowtable holds only the hardware-offloadable wired ports), the flow is
+still added, keyed on the bridge device. If the bridge itself is not in
+the flowtable either, that direction can never match, and the
+connection is left claimed (IPS_OFFLOAD set) but only half-functional -
+no other flowtable rule may pick it up anymore.
+
+Reject the flow in that case. The 'flow add' expression then falls
+through, allowing a later rule with a flowtable that does hold the
+resolved device (for example a software-only flowtable for wlan
+interfaces next to a hardware flowtable for the wired ports) to claim
+the connection.
+
+Flowtables that hold the L3 device itself (e.g. a plain software
+flowtable on the bridge) keep the current behaviour: the default
+neighbour path matches the bridge's own ingress hook, so the entry
+works and is kept. Flows whose forward path cannot be resolved at all
+also keep the current fallback.
+
+Signed-off-by: Yury Ilyanok <yuryster@gmail.com>
+---
+--- a/net/netfilter/nf_flow_table_path.c
++++ b/net/netfilter/nf_flow_table_path.c
+@@ -189,10 +189,10 @@
+ 	return found;
+ }
+ 
+-static void nft_dev_forward_path(struct nf_flow_route *route,
+-				 const struct nf_conn *ct,
+-				 enum ip_conntrack_dir dir,
+-				 struct nft_flowtable *ft)
++static int nft_dev_forward_path(struct nf_flow_route *route,
++				const struct nf_conn *ct,
++				enum ip_conntrack_dir dir,
++				struct nft_flowtable *ft)
+ {
+ 	const struct dst_entry *dst = route->tuple[dir].dst;
+ 	struct net_device_path_stack stack;
+@@ -208,8 +208,28 @@
+ 	else
+ 		route->tuple[dir].out.ifindex = dst->dev->ifindex;
+ 
+-	if (!info.indev || !nft_flowtable_find_dev(info.indev, ft))
+-		return;
++	/* Unresolvable forward path: keep the default neighbour path, the
++	 * flowtable may still match this direction on the L3 device.
++	 */
++	if (!info.indev)
++		return 0;
++
++	if (!nft_flowtable_find_dev(info.indev, ft)) {
++		/* The flowtable holds the L3 device itself (e.g. the bridge):
++		 * the default neighbour path set up by the caller still
++		 * matches its ingress hook - keep it.
++		 */
++		if (nft_flowtable_find_dev(dst->dev, ft))
++			return 0;
++
++		/* The forward path resolved to a device the flowtable has no
++		 * ingress hook on: this direction can never match. Reject the
++		 * flow instead of installing a degraded entry, so that a
++		 * flowtable holding the resolved device can claim the
++		 * connection instead.
++		 */
++		return -ENOENT;
++	}
+ 
+ 	route->tuple[!dir].in.ifindex = info.indev->ifindex;
+ 	for (i = 0; i < info.num_encaps; i++) {
+@@ -225,6 +245,8 @@
+ 		route->tuple[dir].out.hw_ifindex = info.hw_outdev->ifindex;
+ 		route->tuple[dir].xmit_type = info.xmit_type;
+ 	}
++
++	return 0;
+ }
+ 
+ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
+@@ -269,11 +291,19 @@
+ 	nft_default_forward_path(route, this_dst, dir);
+ 	nft_default_forward_path(route, other_dst, !dir);
+ 
+-	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH)
+-		nft_dev_forward_path(route, ct, dir, ft);
+-	if (route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH)
+-		nft_dev_forward_path(route, ct, !dir, ft);
++	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
++	    nft_dev_forward_path(route, ct, dir, ft) < 0)
++		goto reject;
++	if (route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH &&
++	    nft_dev_forward_path(route, ct, !dir, ft) < 0)
++		goto reject;
+ 
+ 	return 0;
++
++reject:
++	dst_release(route->tuple[dir].dst);
++	dst_release(route->tuple[!dir].dst);
++
++	return -ENOENT;
+ }
+ EXPORT_SYMBOL_GPL(nft_flow_route);

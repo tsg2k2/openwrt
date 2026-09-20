@@ -1,0 +1,70 @@
+From: Yury Ilyanok <yury.ilyanok@gmail.com>
+Subject: net: phy: realtek: support a fixed 2500BASE-X host on RTL8221B
+
+When an RTL8221B faces a host SerDes that is hard-fixed at 2500BASE-X
+and cannot dynamically change interface mode (e.g. the RTL9303 switch
+ports on the Verizon CR1000A), two parts of rtl822xb_config_init()
+break the data path:
+
+ - the rate-adapter register block (VEND1 0x75f3/0x6a04/0x6f10/0x6f11
+   plus PHYCR1) programmed by the gen1=false path stops client frames
+   from ever reaching the host MAC (in_octets frozen), even for a
+   native 2.5G client needing no rate adaptation;
+
+ - for a sub-2.5G client the PHY drops its system side to SGMII
+   (1.25 Gbaud).  The fixed host SerDes cannot follow, so the port
+   links but never forwards.
+
+On boards that declare the constraint with a new
+"realtek,host-2500base-x-fixed" PHY node property, use the gen1 path
+(SerDes option still selected, magic block skipped) and pin the system
+side to a constant 2500BASE-X line via the vendor SerDes-mode registers
+(VEND2 0xD032=0x24, 0xD034=0x03) so sub-rate clients are rate-adapted
+inside the PHY (PAUSE) instead of by switching the line rate.  PHYs
+without the property are unaffected.
+
+Signed-off-by: Yury Ilyanok <yury.ilyanok@gmail.com>
+---
+--- a/drivers/net/phy/realtek/realtek_main.c
++++ b/drivers/net/phy/realtek/realtek_main.c
+@@ -1444,7 +1444,39 @@
+ 
+ static int rtl822xb_config_init(struct phy_device *phydev)
+ {
+-	return rtl822x_set_serdes_option_mode(phydev, false);
++	int ret;
++
++	if (!of_property_read_bool(phydev->mdio.dev.of_node,
++				   "realtek,host-2500base-x-fixed"))
++		return rtl822x_set_serdes_option_mode(phydev, false);
++
++	/* The host SerDes this PHY faces is fixed at 2500BASE-X and does not
++	 * participate in the PHY's rate-adapter handshake.  Take the gen1
++	 * path: the 2500BASE-X SerDes option is still selected (link comes
++	 * up) but the rate-adapter register block is skipped -- with it
++	 * written, client frames never reach the host MAC.
++	 */
++	ret = rtl822x_set_serdes_option_mode(phydev, true);
++	if (ret < 0)
++		return ret;
++
++	/* Keep the system side at a constant 2500BASE-X line.  Left to its
++	 * dynamic default the PHY drops to SGMII for a sub-2.5G client, which
++	 * a fixed-2500BASE-X host SerDes cannot follow (port links but never
++	 * forwards).  Sub-rate clients are rate-adapted inside the PHY
++	 * instead.
++	 */
++	ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1, RTL822X_VND1_SERDES_OPTION,
++			     RTL822X_VND1_SERDES_OPTION_MODE_MASK,
++			     RTL822X_VND1_SERDES_OPTION_MODE_2500BASEX);
++	if (ret < 0)
++		return ret;
++
++	ret = phy_write_mmd(phydev, MDIO_MMD_VEND2, 0xd032, 0x0024);
++	if (ret < 0)
++		return ret;
++
++	return phy_write_mmd(phydev, MDIO_MMD_VEND2, 0xd034, 0x0003);
+ }
+ 
+ static int rtl822x_serdes_write(struct phy_device *phydev, u16 reg, u16 val)

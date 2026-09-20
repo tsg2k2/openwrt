@@ -1,0 +1,54 @@
+From: Yury Ilyanok <yury.ilyanok@gmail.com>
+Subject: net: phy: aquantia: rate-match to a fixed 10GBASE-R host on request
+
+When an AQR113C sits behind a host SerDes that is fixed at 10GBASE-R
+(e.g. the RTL9303 switch port on the Verizon CR1000A), its firmware
+default of provisioning the sub-10G line rates for USXGMII rate
+adaptation cannot work: the host cannot follow the line-rate change, so
+a 5G/2.5G/1G client links but passes no traffic.  Re-provision those
+rates to 10GBASE-R (XFI) + PAUSE rate matching instead.
+
+Gate the re-provisioning on a new "aquantia,host-10gbase-r-fixed" PHY
+node property so only boards that declare the constraint are affected;
+PHYs without the property (e.g. the USXGMII-attached WAN AQR113C on the
+same board) keep the firmware provisioning.
+
+Signed-off-by: Yury Ilyanok <yury.ilyanok@gmail.com>
+---
+--- a/drivers/net/phy/aquantia/aquantia_main.c
++++ b/drivers/net/phy/aquantia/aquantia_main.c
+@@ -615,6 +615,34 @@
+ 	if (!ret)
+ 		aqr107_chip_info(phydev);
+
++	/*
++	 * The board may declare that the host SerDes is fixed at 10GBASE-R
++	 * and cannot follow the firmware's USXGMII-style line-rate changes
++	 * for sub-10G clients.  Re-provision those rates to 10GBASE-R (XFI)
++	 * + PAUSE rate matching so the line stays at 10G and the PHY
++	 * rate-adapts internally.
++	 */
++	if (of_property_read_bool(phydev->mdio.dev.of_node,
++				  "aquantia,host-10gbase-r-fixed")) {
++		static const u16 rate_cfg[] = {
++			VEND1_GLOBAL_CFG_100M, VEND1_GLOBAL_CFG_1G,
++			VEND1_GLOBAL_CFG_2_5G, VEND1_GLOBAL_CFG_5G,
++		};
++		int i;
++
++		for (i = 0; i < ARRAY_SIZE(rate_cfg); i++) {
++			ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1, rate_cfg[i],
++					     VEND1_GLOBAL_CFG_SERDES_MODE |
++					     VEND1_GLOBAL_CFG_RATE_ADAPT,
++					     FIELD_PREP(VEND1_GLOBAL_CFG_SERDES_MODE,
++							VEND1_GLOBAL_CFG_SERDES_MODE_XFI) |
++					     FIELD_PREP(VEND1_GLOBAL_CFG_RATE_ADAPT,
++							VEND1_GLOBAL_CFG_RATE_ADAPT_PAUSE));
++			if (ret)
++				return ret;
++		}
++	}
++
+ 	ret = aqr107_set_downshift(phydev, MDIO_AN_VEND_PROV_DOWNSHIFT_DFLT);
+ 	if (ret)
+ 		return ret;

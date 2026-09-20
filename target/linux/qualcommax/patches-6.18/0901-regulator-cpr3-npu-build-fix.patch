@@ -1,0 +1,32 @@
+From: OpenWrt
+Subject: [PATCH] regulator: cpr3-npu: build against mainline kernels
+
+The CPR3 NPU regulator driver calls register_low_temp_notif() (a QSDK TSENS
+low-temperature notifier that does not exist in mainline) and defines
+cpr3_npu_temp_notify() without a prototype, both of which break the build
+under -Werror. The cold-temperature open-loop voltage adjustment is optional,
+so provide a no-op stub for the notifier and make the callback static. This
+lets CONFIG_REGULATOR_CPR3_NPU be enabled so the NSS/NPU power island corner
+rail (npu_corner, fed by PMIC s4) can be managed.
+
+--- a/drivers/regulator/cpr3-npu-regulator.c
++++ b/drivers/regulator/cpr3-npu-regulator.c
+@@ -113,7 +113,17 @@
+ 
+ struct cpr3_controller *g_ctrl;
+ 
+-void cpr3_npu_temp_notify(int sensor, int temp, int low_notif)
++/*
++ * OpenWrt: the QSDK TSENS low-temperature notifier API is absent on mainline.
++ * Stub it as a no-op so the optional cold-temp open-loop voltage adjustment
++ * compiles; NSS core bring-up does not depend on cold-temp correction.
++ */
++static inline void register_low_temp_notif(int sensor, int cold_temp,
++					   void (*cb)(int, int, int))
++{
++}
++
++static void cpr3_npu_temp_notify(int sensor, int temp, int low_notif)
+ {
+ 	u32 prev_sensor_state;
+ 

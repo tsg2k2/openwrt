@@ -1,0 +1,87 @@
+From: Yury Ilyanok <yury.ilyanok@gmail.com>
+Subject: [PATCH] net: phy: add PHY_INTERFACE_MODE_HSGMII (2.5G SGMII)
+
+Mainline phy_interface_t has no value for HSGMII (a.k.a. HiSGMII / 2.5G
+SGMII): the rate-adapting 2.5G SGMII variant that is distinct, at the PCS
+layer, from clause-37 2500BASE-X.  They share the 3.125 GBaud line rate
+but are NOT interoperable, so a port whose MAC speaks HSGMII cannot be
+described as "2500base-x".
+
+The Verizon CR1000A wires its MXL3711 MoCA SoC's ethernet MAC to the
+RTL9303 switch over a fixed HSGMII link (the switch SerDes is driven
+in HSGMII, not 2500BASE-X).  Add the interface mode so the
+link can be described accurately in DT (phy-mode = "hsgmii") and both the
+MoCA PHY driver and the switch driver derive the matching PCS mode from
+the standard phydev->interface.
+
+HSGMII behaves like 2500BASE-X for phylink's purposes (3.125 GBaud,
+2.5G full-duplex), so it is handled identically in the speed/capability
+helpers.
+
+Signed-off-by: Yury Ilyanok <yury.ilyanok@gmail.com>
+---
+--- a/include/linux/phy.h
++++ b/include/linux/phy.h
+@@ -95,6 +95,7 @@
+  * @PHY_INTERFACE_MODE_1000BASEX: 1000 BaseX
+  * @PHY_INTERFACE_MODE_2500BASEX: 2500 BaseX
+  * @PHY_INTERFACE_MODE_5GBASER: 5G BaseR
++ * @PHY_INTERFACE_MODE_HSGMII: 2.5G SGMII (HiSGMII)
+  * @PHY_INTERFACE_MODE_RXAUI: Reduced XAUI
+  * @PHY_INTERFACE_MODE_XAUI: 10 Gigabit Attachment Unit Interface
+  * @PHY_INTERFACE_MODE_10GBASER: 10G BaseR
+@@ -153,6 +154,7 @@
+ 	PHY_INTERFACE_MODE_LAUI,
+ 	PHY_INTERFACE_MODE_100GBASEP,
+ 	PHY_INTERFACE_MODE_MIILITE,
++	PHY_INTERFACE_MODE_HSGMII,
+ 	PHY_INTERFACE_MODE_MAX,
+ } phy_interface_t;
+ 
+@@ -261,6 +263,8 @@
+ 		return "2500base-x";
+ 	case PHY_INTERFACE_MODE_5GBASER:
+ 		return "5gbase-r";
++	case PHY_INTERFACE_MODE_HSGMII:
++		return "hsgmii";
+ 	case PHY_INTERFACE_MODE_RXAUI:
+ 		return "rxaui";
+ 	case PHY_INTERFACE_MODE_XAUI:
+--- a/drivers/net/phy/phylink.c
++++ b/drivers/net/phy/phylink.c
+@@ -223,6 +223,7 @@
+ 	case PHY_INTERFACE_MODE_1000BASEX: /* 1.25Mbd */
+ 		return 1250;
+ 	case PHY_INTERFACE_MODE_2500BASEX: /* 3.125Mbd */
++	case PHY_INTERFACE_MODE_HSGMII: /* 3.125Mbd */
+ 		return 3125;
+ 	case PHY_INTERFACE_MODE_5GBASER: /* 5.15625Mbd */
+ 		return 5156;
+@@ -274,6 +275,7 @@
+ 
+ 	case PHY_INTERFACE_MODE_2500BASEX:
+ 	case PHY_INTERFACE_MODE_10G_QXGMII:
++	case PHY_INTERFACE_MODE_HSGMII:
+ 		return SPEED_2500;
+ 
+ 	case PHY_INTERFACE_MODE_5GBASER:
+--- a/drivers/net/phy/phy_caps.c
++++ b/drivers/net/phy/phy_caps.c
+@@ -332,6 +332,7 @@
+ 		break;
+ 
+ 	case PHY_INTERFACE_MODE_2500BASEX:
++	case PHY_INTERFACE_MODE_HSGMII:
+ 		link_caps |= BIT(LINK_CAPA_2500FD);
+ 		break;
+ 
+--- a/drivers/net/phy/phy-core.c
++++ b/drivers/net/phy/phy-core.c
+@@ -178,6 +178,7 @@
+ 	case PHY_INTERFACE_MODE_SMII:
+ 	case PHY_INTERFACE_MODE_1000BASEX:
+ 	case PHY_INTERFACE_MODE_2500BASEX:
++	case PHY_INTERFACE_MODE_HSGMII:
+ 	case PHY_INTERFACE_MODE_5GBASER:
+ 	case PHY_INTERFACE_MODE_10GBASER:
+ 	case PHY_INTERFACE_MODE_25GBASER:
