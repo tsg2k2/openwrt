@@ -1,0 +1,58 @@
+From: Yury Ilyanok <yuryster@gmail.com>
+Subject: [PATCH] net: phy: aquantia: keep USXGMII system-side autoneg enabled
+
+Kernel 6.14 gave the aquantia driver .inband_caps/.config_inband, and for
+USXGMII aqr_gen2_inband_caps() advertises LINK_INBAND_ENABLE |
+LINK_INBAND_DISABLE.  A port described with a phy-handle and no
+"managed" property resolves to MLO_AN_PHY, so phylink takes the
+!phylink_autoneg_inband() path, sees that the PHY offers
+LINK_INBAND_DISABLE, and settles on it:
+
+	if (phy_ib_caps & LINK_INBAND_DISABLE)
+		pl->phy_ib_mode = LINK_INBAND_DISABLE;
+
+then calls phy_config_inband(), and aqr_gen2_config_inband() *clears*
+4.0xC441 bit 3 - undoing the bit 0924 asserts in config_init().
+
+The result is exactly the failure 0924 describes: the copper side trains
+and reports link, the system interface never becomes ready, and the port
+passes no traffic in either direction.  On the CR1000A this killed lan10g
+(RTL9303 SDS3 <-> AQR113C, USXGMII) across the 6.12 -> 6.18 rebase; 6.12
+has no in-band ops in this driver at all, so the config_init() setting
+simply stuck.
+
+The system interface requires its autoneg regardless of what phylink
+picks for the line side, so assert the bit unconditionally here rather
+than honouring a request that only turns the port off.
+
+Signed-off-by: Yury Ilyanok <yuryster@gmail.com>
+---
+--- a/drivers/net/phy/aquantia/aquantia_main.c	2026-09-20 18:23:02.647870651 -0400
++++ b/drivers/net/phy/aquantia/aquantia_main.c	2026-09-20 18:23:02.656436350 -0400
+@@ -1296,14 +1296,20 @@
+ 
+ 	if (phydev->interface == PHY_INTERFACE_MODE_USXGMII ||
+ 	    phydev->interface == PHY_INTERFACE_MODE_10G_QXGMII) {
+-		u16 set = 0;
+-
+-		if (modes == LINK_INBAND_ENABLE)
+-			set = MDIO_PHYXS_VEND_PROV2_USX_AN;
+-
++		/*
++		 * The system interface of this PHY only passes traffic when
++		 * its USXGMII autoneg is running, whatever phylink decided
++		 * for the line side: with the bit clear the 4.0xE812 "system
++		 * interface ready" status stays 0 and the port carries
++		 * nothing in either direction, even though the copper side
++		 * trains and reports link.  This is the same requirement
++		 * config_init() already asserts; honouring a
++		 * LINK_INBAND_DISABLE request here would just undo it.
++		 */
+ 		return phy_modify_mmd(phydev, MDIO_MMD_PHYXS,
+ 				      MDIO_PHYXS_VEND_PROV2,
+-				      MDIO_PHYXS_VEND_PROV2_USX_AN, set);
++				      MDIO_PHYXS_VEND_PROV2_USX_AN,
++				      MDIO_PHYXS_VEND_PROV2_USX_AN);
+ 	}
+ 
+ 	for (int i = 0; i < AQR_NUM_GLOBAL_CFG; i++) {
