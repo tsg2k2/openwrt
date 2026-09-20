@@ -57,7 +57,15 @@ The CR1000A MoCA link (MXL3711, fixed-link MAC-to-MAC) runs HISGMII.
  		__set_bit(RTPCS_SDS_MODE_2500BASEX, sds->supported_modes);
  		__set_bit(RTPCS_SDS_MODE_10GBASER, sds->supported_modes);
  		break;
-@@ -2121,6 +2129,7 @@
+@@ -1843,6 +1851,7 @@
+ 	case RTPCS_SDS_MODE_SGMII:
+ 	case RTPCS_SDS_MODE_1000BASEX:
+ 		return PAGE_ANA_1G2;
++	case RTPCS_SDS_MODE_HISGMII:
+ 	case RTPCS_SDS_MODE_2500BASEX:
+ 		return PAGE_ANA_3G1;
+ 	case RTPCS_SDS_MODE_QSGMII:
+@@ -2121,6 +2130,7 @@
  	switch (hw_mode) {
  	case RTPCS_SDS_MODE_SGMII:
  	case RTPCS_SDS_MODE_1000BASEX:
@@ -65,7 +73,7 @@ The CR1000A MoCA link (MXL3711, fixed-link MAC-to-MAC) runs HISGMII.
  	case RTPCS_SDS_MODE_2500BASEX:
  	case RTPCS_SDS_MODE_10GBASER:
  		ret = rtpcs_93xx_sds_set_ip_mode(sds, hw_mode);
-@@ -3070,6 +3079,7 @@
+@@ -3070,6 +3080,7 @@
  		rtpcs_sds_write(sds, PAGE_ANA_10G_EXT, 0x14, 0xE008);
  		break;
  
