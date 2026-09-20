@@ -293,6 +293,9 @@
 				port@8 {
 					reg = <8>;
 					label = "lan10g";
+						/* phylib drives this PHY; phylink owns the switch-side
+						 * link, so the HW poller must not also drive it. */
+						realtek,no-hw-polling;
 					pcs-handle = <&serdes3 0>;
 					phy-handle = <&aqr_p8>;
 					/*
@@ -307,6 +310,9 @@
 				port@20 {
 					reg = <20>;
 					label = "lan2";
+						/* phylib drives this PHY; phylink owns the switch-side
+						 * link, so the HW poller must not also drive it. */
+						realtek,no-hw-polling;
 					pcs-handle = <&serdes5 0>;
 					phy-handle = <&rtl8221b_p20>;
 					phy-mode = "2500base-x";
@@ -315,6 +321,9 @@
 				port@24 {
 					reg = <24>;
 					label = "lan1";
+						/* phylib drives this PHY; phylink owns the switch-side
+						 * link, so the HW poller must not also drive it. */
+						realtek,no-hw-polling;
 					pcs-handle = <&serdes6 0>;
 					phy-handle = <&rtl8221b_p24>;
 					phy-mode = "2500base-x";

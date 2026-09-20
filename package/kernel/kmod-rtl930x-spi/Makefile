@@ -55,6 +55,7 @@ define Build/Prepare
 	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/14-eee-working.patch
 	patch -p1 -d $(PKG_BUILD_DIR) -i $(CURDIR)/patches/16-external-spi-skip-soc-dependency-checks.patch
 	patch -p1 -d $(PKG_BUILD_DIR) -i $(CURDIR)/patches/17-otto-mdio-foreign-bus-phy.patch
+	patch -p1 -d $(PKG_BUILD_DIR) -i $(CURDIR)/patches/18-otto-mdio-optional-hw-polling.patch
 endef
 
 define KernelPackage/rtl930x-regmap

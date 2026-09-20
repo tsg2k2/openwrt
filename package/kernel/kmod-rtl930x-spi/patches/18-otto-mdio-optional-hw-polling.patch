@@ -1,0 +1,58 @@
+mdio-rtl-otto: let a board opt a port out of hardware PHY polling
+
+The RTL93xx MDIO block can poll a port's PHY in hardware and feed link state
+straight to the MAC.  That is right for a port the switch owns outright, but
+wrong for one whose PHY is driven by phylib while phylink owns the switch-side
+link through mac_link_up(): the two fight.  The port links, the poller's own
+PHY read knocks it back down about a second later, and it stays down - link
+shows up, tx increments, and the MAC receives nothing.
+
+On the CR1000A that is lan10g (port 8, AQR113C) and lan1/lan2 (ports 24/20,
+RTL8221B).  moca (port 25) is unaffected only because its PHY sits on the SoC
+MDIO bus, so this driver already skips it.
+
+Add realtek,no-hw-polling on the port node to leave such a port SerDes-driven,
+as rtmd_930x_setup_polling() already initialises every port before deciding
+which ones to promote to "PHY driven".
+
+This restores, in upstream's new layout, what the old out-of-tree patch did by
+masking ports 8/20/24 out of the switch driver's rtldsa_enable_phy_polling() -
+a function that no longer exists, because upstream moved polling setup into
+this MDIO driver and configures it at probe.
+
+--- a/mdio-realtek-otto.c
++++ b/mdio-realtek-otto.c
+@@ -210,6 +210,7 @@
+ struct rtmd_port {
+ 	int page;
+ 	bool raw;
++	bool no_hw_poll;
+ 	u8 smi_addr;
+ 	u8 smi_bus;
+ };
+@@ -845,6 +846,16 @@
+ 
+ 	/* Define PHY specific polling parameters */
+ 	for_each_phy_port(ctrl, pn) {
++		/* A port whose PHY is driven by phylib/phylink must stay
++		 * SerDes-driven as set above.  If the hardware poller reads
++		 * it too, the two fight: the port links, the poller's own PHY
++		 * read knocks it back down about a second later, and it stays
++		 * down - the MAC never receives.  phylink owns the switch-side
++		 * link for these ports via mac_link_up().
++		 */
++		if (ctrl->port[pn].no_hw_poll)
++			continue;
++
+ 		if (rtmd_get_phy_info(ctrl, pn, &phyinfo))
+ 			continue;
+ 
+@@ -1052,6 +1063,8 @@
+ 
+ 		ctrl->port[pn].smi_bus = smi_bus;
+ 		ctrl->port[pn].smi_addr = smi_addr;
++		ctrl->port[pn].no_hw_poll =
++			fwnode_property_present(fw_port, "realtek,no-hw-polling");
+ 		__set_bit(pn, ctrl->phy_ports);
+ 	}
+ 
