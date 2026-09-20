@@ -1,0 +1,23 @@
+rtl83xx: advertise HSGMII in the RTL93xx DSA interfaces
+
+So phylink accepts a port with phy-mode = "hsgmii" and selects the
+RTL-Otto PCS for it (the PCS handles HISGMII like 2500BASE-X with its
+distinct hardware mode value).
+
+===================================================================
+--- a/dsa.c
++++ b/dsa.c
+@@ -262,8 +262,12 @@
+ 		__set_bit(PHY_INTERFACE_MODE_SGMII, config->supported_interfaces);
+ 		__set_bit(PHY_INTERFACE_MODE_QSGMII, config->supported_interfaces);
+ 	}
+-	if (caps & MAC_2500FD)
++	if (caps & MAC_2500FD) {
+ 		__set_bit(PHY_INTERFACE_MODE_2500BASEX, config->supported_interfaces);
++		/* HSGMII is the CR1000A MoCA link's mode; upstream's bitmap_copy
++		 * below propagates it into pcs_interfaces for us. */
++		__set_bit(PHY_INTERFACE_MODE_HSGMII, config->supported_interfaces);
++	}
+ 	if (caps & MAC_10000FD) {
+ 		__set_bit(PHY_INTERFACE_MODE_10GBASER, config->supported_interfaces);
+ 		__set_bit(PHY_INTERFACE_MODE_USXGMII, config->supported_interfaces);

@@ -1,0 +1,27 @@
+otto_table: build as a loadable module
+
+Upstream's drivers/soc/realtek/otto_table.c is a built-in driver
+(obj-$(CONFIG_REALTEK_OTTO_TABLE), builtin_platform_driver) and the rtl83xx
+DSA driver now calls into it.  Out-of-tree it has to ship as a module, which
+needs a real module_init and a MODULE_LICENSE: builtin_platform_driver()
+expands to device_initcall(), which in a modular build becomes init_module
+and collides with the DSA module's own.
+
+--- a/otto_table.c
++++ b/otto_table.c
+@@ -281,7 +281,7 @@
+ 		.suppress_bind_attrs = true,
+ 	},
+ };
+-builtin_platform_driver(otto_table_driver);
++module_platform_driver(otto_table_driver);
+ 
+ static int otto_table_id_to_handle(enum otto_table_id id)
+ {
+@@ -489,3 +489,6 @@
+ 	return ret;
+ }
+ EXPORT_SYMBOL_GPL(otto_table_write_bytes);
++
++MODULE_DESCRIPTION("Realtek Otto switch table accessor");
++MODULE_LICENSE("GPL");

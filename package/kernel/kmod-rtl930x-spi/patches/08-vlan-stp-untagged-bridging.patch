@@ -1,0 +1,56 @@
+rtl83xx: default untagged-bridge VLAN/STP setup
+
+User- and CPU-port STP forwarding state, VLAN1 all-ports-untagged init,
+CPU-port always untagged in VLANs, all SPI member ports untagged, and the
+CPU-port SA/DA-block clear.
+
+===================================================================
+--- a/dsa.c
++++ b/dsa.c
+@@ -180,10 +180,27 @@
+ 			if (priv->family_id == RTL9300_FAMILY_ID) {
+ 				sw_w32_mask(BIT(i), 0, RTL930X_L2_PORT_SABLK_CTRL);
+ 				sw_w32_mask(BIT(i), 0, RTL930X_L2_PORT_DABLK_CTRL);
++				/* Initialize CIST (MSTI 0) to FORWARDING for all user ports.
++				 * Hardware default after reset is DISABLED; ingress frames from
++				 * clients are dropped at the MSTP check until this is set. */
++				priv->r->stp_set(priv, 0, i, 3);
+ 			}
+ 		}
+ 	}
+ 	priv->r->traffic_set(priv->r->cpu_port, BIT_ULL(priv->r->cpu_port));
++	/* CPU port MSTP state is also hardware-default DISABLED.  Set it to
++	 * FORWARDING so the switch actually egresses frames toward the host. */
++	if (priv->family_id == RTL9300_FAMILY_ID)
++		priv->r->stp_set(priv, 0, priv->r->cpu_port, 3);
++	/* SA/DA-block for cpu_port is never cleared: port_enable returns early
++	 * for cpu ports before reaching the SABLK/DABLK clear code.  With
++	 * DABLK set, unknown unicast cannot be flooded to the CPU port, so
++	 * every unicast frame is silently dropped.  With SABLK set, the router
++	 * MAC is never hardware-learned on port 28.  Clear both here. */
++	if (priv->family_id == RTL9300_FAMILY_ID) {
++		sw_w32_mask(BIT(priv->r->cpu_port), 0, RTL930X_L2_PORT_SABLK_CTRL);
++		sw_w32_mask(BIT(priv->r->cpu_port), 0, RTL930X_L2_PORT_DABLK_CTRL);
++	}
+ 	priv->r->print_matrix();
+ 
+ 	rtldsa_stats_init(priv);
+--- a/vlan.c
++++ b/vlan.c
+@@ -171,6 +171,16 @@
+ 	 * on the CPU port -- end devices and the CPU interface discard it. */
+ 	priv->r->vlan_set_untagged(0, info.member_ports);
+ 
++	/* SPI/external-CPU mode: the RTL930x CPU port is a plain Ethernet link
++	 * with no CPU-tag mechanism.  vlan_set_tagged() above cleared TBL_0 for
++	 * VLANs 1-4095 but left TBL_2 (the UNTAG table) untouched, so stale state
++	 * (e.g. left set by an earlier bring-up) causes CPU-bound frames to carry an
++	 * 802.1Q VLAN 1 tag that the ARP/IP stack cannot process.  Pre-configure
++	 * VLAN 1 with all ports as UNTAGGED members to fix both user-port egress
++	 * (no tag to USB NIC clients) and CPU-port egress (no tag to the conduit). */
++	priv->r->vlan_set_tagged(1, &info);
++	priv->r->vlan_set_untagged(1, info.member_ports);
++
+ 	/* Bridge does not call vlan_add with PVID for the CPU port, so set it here */
+ 	rtldsa_vlan_set_pvid(priv, priv->r->cpu_port, 1);
+ 

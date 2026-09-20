@@ -1,0 +1,31 @@
+rtl930x: table-locked, cached counter path for SPI
+
+Use the rtl931x-style table-locked counter access so MIB reads are safe over
+the slow SPI bus.
+
+===================================================================
+--- a/rtl930x.c
++++ b/rtl930x.c
+@@ -2795,10 +2795,18 @@ const struct rtldsa_config rtldsa_930x_c
+ 	.stat_port_std_mib = RTL930X_STAT_PORT_MIB_CNTR,
+ 	.stat_port_prv_mib = RTL930X_STAT_PORT_PRVTE_CNTR,
+ 	.mib_desc = &rtldsa_930x_mib_desc,
+-	.stat_counters_lock = rtldsa_counters_lock_register,
+-	.stat_counters_unlock = rtldsa_counters_unlock_register,
+-	.stat_update_counters_atomically = rtldsa_update_counters_atomically,
+-	.stat_counter_poll_interval = RTLDSA_COUNTERS_POLL_INTERVAL,
++	/* CR1000A external-SPI: counter registers are read over SPI, which can
++	 * sleep and takes ~ms per access.  The native rtl930x path holds a
++	 * spinlock and reads the HW inside .get_stats64 (atomic context) via
++	 * stat_update_counters_atomically - over SPI that means sleeping under a
++	 * spinlock and multi-second lock holds, which RCU-stalls the CPU when
++	 * anything reads stats (ethtool -S, /proc/net/dev, LuCI).  Use the
++	 * rtl931x-style table path instead: a sleeping mutex around the HW reads,
++	 * no HW access in .get_stats64 (it returns the cached link_stat prepared
++	 * by the poll worker), and a fast (3s) poll so the cache stays fresh. */
++	.stat_counters_lock = rtldsa_counters_lock_table,
++	.stat_counters_unlock = rtldsa_counters_unlock_table,
++	.stat_counter_poll_interval = RTLDSA_COUNTERS_FAST_POLL_INTERVAL,
+ 	.traffic_enable = rtl930x_traffic_enable,
+ 	.traffic_disable = rtl930x_traffic_disable,
+ 	.traffic_set = rtl930x_traffic_set,

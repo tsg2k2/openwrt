@@ -1,0 +1,47 @@
+rtl83xx: CPU-port PVID
+
+Derive the CPU-port PVID from the bridge and initialise it to 1.
+
+===================================================================
+--- a/vlan.c
++++ b/vlan.c
+@@ -6,6 +6,7 @@
+ 
+ #include "rtl-otto.h"
+ #include "vlan.h"
++#include <linux/dsa/8021q.h>
+ 
+ /* VLAN register definitions private to this translation unit. */
+ #define RTL838X_VLAN_PROFILE(idx)		(0x3A88 + ((idx) << 2))
+@@ -171,6 +172,9 @@
+ 	 * on the CPU port -- end devices and the CPU interface discard it. */
+ 	priv->r->vlan_set_untagged(0, info.member_ports);
+ 
++	/* Bridge does not call vlan_add with PVID for the CPU port, so set it here */
++	rtldsa_vlan_set_pvid(priv, priv->r->cpu_port, 1);
++
+ 	/* Set forwarding action based on inner VLAN tag */
+ 	for (int i = 0; i < priv->r->cpu_port; i++)
+ 		priv->r->vlan_fwd_on_inner(i, true);
+@@ -846,12 +850,16 @@
+ 	 * of now no such logic is in place. So for the CPU port keep the fixed
+ 	 * PVID=0 from initial setup in place and ignore all subsequent settings.
+ 	 */
+-	if (port != priv->r->cpu_port) {
+-		if (vlan->flags & BRIDGE_VLAN_INFO_PVID)
++	if (vlan->flags & BRIDGE_VLAN_INFO_PVID) {
++		/* The bridge replays its default_pvid VLAN on every join even
++		 * when VLAN-unaware; do not let it steal the port's tag_8021q
++		 * PVID while the 802.1Q tagger is active.
++		 */
++		if (!(vid_is_dsa_8021q(priv->ports[port].pvid) &&
++		      !vid_is_dsa_8021q(vlan->vid)))
+ 			rtldsa_vlan_set_pvid(priv, port, vlan->vid);
+-		else if (priv->ports[port].pvid == vlan->vid)
+-			rtldsa_vlan_set_pvid(priv, port, 0);
+-	}
++	} else if (priv->ports[port].pvid == vlan->vid)
++		rtldsa_vlan_set_pvid(priv, port, 0);
+ 
+ 	/* Get port memberships of this vlan */
+ 	priv->r->vlan_tables_read(vlan->vid, &info);

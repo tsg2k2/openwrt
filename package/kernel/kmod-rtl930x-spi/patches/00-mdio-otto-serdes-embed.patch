@@ -1,0 +1,23 @@
+mdio-realtek-otto-serdes: hand driver registration to the module owner
+
+This file is linked into rtl930x-spi.ko together with the SPI access
+driver, which owns the module init.  Export the platform driver instead of
+registering it here, so the module init can register it before the SPI
+probe spawns the child mdio-serdes device.
+
+--- a/mdio-realtek-otto-serdes.c
++++ b/mdio-realtek-otto-serdes.c
+@@ -542,7 +542,12 @@
+ 	},
+ 	.probe = rtsds_probe,
+ };
+-module_platform_driver(rtsds_mdio_driver);
++/*
++ * Linked into rtl930x-spi.ko: its module init registers this platform
++ * driver before the SPI probe spawns the child mdio-serdes device, so the
++ * SerDes bus is available synchronously during the SPI probe.
++ */
++struct platform_driver *rtl930x_serdes_mdio_driver = &rtsds_mdio_driver;
+ 
+ MODULE_AUTHOR("Markus Stockhausen <markus.stockhausen@gmx.de>");
+ MODULE_DESCRIPTION("Realtek Otto SerDes MDIO bus");

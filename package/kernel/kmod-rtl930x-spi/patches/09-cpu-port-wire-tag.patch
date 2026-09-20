@@ -1,0 +1,39 @@
+rtl930x: designate port 27 as CPU port and insert the inline wire tag
+
+The RTL9303 inserts its 0x8899 inline CPU tag only when port 27 is the
+designated silicon CPU port; tag/untag on the CPU conduit accordingly.
+Under the 802.1Q tagger the designation must stay off, so the
+port_enable re-assert is gated on the active tag protocol.
+
+===================================================================
+--- a/dsa.c
++++ b/dsa.c
+@@ -317,6 +317,12 @@
+ 		sw_w32_mask(BIT(priv->r->cpu_port), 0, RTL930X_L2_PORT_SABLK_CTRL);
+ 		sw_w32_mask(BIT(priv->r->cpu_port), 0, RTL930X_L2_PORT_DABLK_CTRL);
+ 	}
++	/* Designate the silicon CPU port so the switch inserts the inline
++	 * Realtek CPU tag (EtherType from MAC_L2_CPU_TAG_ID_CTRL @ 0xc710,
++	 * default 0x8899) on egress.  bit0: 1=port27, 0=port28.  Re-asserted
++	 * in port_enable in case this write does not latch. */
++	if (priv->family_id == RTL9300_FAMILY_ID)
++		sw_w32(priv->r->cpu_port == 27 ? 0x1 : 0x0, 0xc70c);
+ 	priv->r->print_matrix();
+ 
+ 	/* TODO: Initialize statistics */
+@@ -1156,6 +1162,15 @@
+ 	pr_debug("%s: %p %d", __func__, priv, port);
+ 	priv->ports[port].enable = true;
+ 
++	/* Re-assert the silicon CPU-port designation (MAC_L2_CPU_PORT_CTRL
++	 * @ 0xc70c bit0).  The one-shot write in rtldsa_93xx_setup may not
++	 * latch if the CPU SerDes link is not up at setup time; port_enable
++	 * runs repeatedly during bring-up, so this keeps the wire tag on.
++	 * Under the 802.1Q tagger the inline tag must stay OFF. */
++	if (priv->family_id == RTL9300_FAMILY_ID &&
++	    priv->tag_proto != DSA_TAG_PROTO_RTL_OTTO_8021Q)
++		sw_w32(priv->r->cpu_port == 27 ? 0x1 : 0x0, 0xc70c);
++
+ 	/* enable inner tagging on egress, do not keep any tags; under the
+ 	 * 802.1Q tagger the tag status must stay VLAN-table-driven instead
+ 	 */

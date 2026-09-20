@@ -1,0 +1,207 @@
+pcs-rtl-otto: SPI-slave adapter + kernel 6.12 compat
+
+Adapt the RTL-Otto PCS (taken unmodified from the realtek target) for an
+external SPI-attached RTL9303 on qualcommax's 6.12 kernel:
+
+  - compat shims for 6.12: linux/phy/phy-common-props.h (manual
+    lane-polarity lookup; resolves to "normal", no board DT here inverts
+    lanes), the scoped fwnode child iterator, and the two-argument
+    phylink_pcs_ops.pcs_get_state() prototype (neg_mode is unused).
+  - per-lane board quirks from the serdes firmware node:
+    "realtek,skip-rx-calibration" skips the loopback RX-cal (on the
+    CR1000A only the 10G AQR lane SDS3 tolerates it; on the other lanes
+    it fails with "symbol error rate too high" and wedges RX), and
+    "realtek,sds-regs-override" (<page reg mask value> quadruplets,
+    applied after every mode setup) corrects lane registers the generic
+    bring-up cannot know about (fixed-link forced RX signal-detect,
+    fiber media-type selects).
+  - driver registration moves to the rtl930x-spi module init (single
+    module, ordered before the SPI probe spawns the child pcs device).
+
+--- a/pcs-rtl-otto.c
+--- a/pcs-rtl-otto.c
++++ b/pcs-rtl-otto.c
+@@ -7,13 +7,47 @@
+ #include <linux/of_platform.h>
+ #include <linux/pcs/pcs-provider.h>
+ #include <linux/phy.h>
+-#include <linux/phy/phy-common-props.h>
+ #include <linux/phylink.h>
+ #include <linux/platform_device.h>
+ #include <linux/property.h>
+ #include <linux/regmap.h>
+ #include <linux/rtnetlink.h>
+ 
++#include "rtpcs_spi.h"
++
++/*
++ * Compat for kernel 6.12: linux/phy/phy-common-props.h (manual lane-polarity
++ * lookup) and the scoped fwnode child iterator do not exist yet.  No board
++ * DT here uses lane-polarity inversion, so the lookups resolve to "normal".
++ */
++#ifndef PHY_POL_NORMAL
++#define PHY_POL_NORMAL	0
++#define PHY_POL_INVERT	1
++
++static inline int phy_get_manual_rx_polarity(struct fwnode_handle *fwnode,
++					     const char *mode_name,
++					     unsigned int *val)
++{
++	*val = PHY_POL_NORMAL;
++	return 0;
++}
++
++static inline int phy_get_manual_tx_polarity(struct fwnode_handle *fwnode,
++					     const char *mode_name,
++					     unsigned int *val)
++{
++	*val = PHY_POL_NORMAL;
++	return 0;
++}
++#endif /* PHY_POL_NORMAL */
++
++#ifndef fwnode_for_each_child_node_scoped
++#define fwnode_for_each_child_node_scoped(fwnode, child)		\
++	for (struct fwnode_handle *child __free(fwnode_handle) =	\
++		fwnode_get_next_child_node(fwnode, NULL);		\
++	     child; child = fwnode_get_next_child_node(fwnode, child))
++#endif
++
+ #define RTPCS_SDS_CNT				14
+ #define RTPCS_MAX_LINKS_PER_SDS			8
+ 
+@@ -228,6 +262,9 @@
+ 	u8 id;
+ 	u8 num_of_links;
+ 	bool first_start;
++	bool skip_rx_cali;	/* board quirk: skip the loopback RX-cal on this lane */
++	const u32 *fwnode_overrides;	/* <page reg mask value> quadruplets */
++	int n_fwnode_overrides;
+ };
+ 
+ struct rtpcs_ctrl {
+@@ -3133,7 +3170,7 @@
+ 
+ 	rtpcs_930x_sds_activate(sds);
+ 
+-	if (hw_mode == RTPCS_SDS_MODE_QSGMII)
++	if (hw_mode == RTPCS_SDS_MODE_QSGMII || sds->skip_rx_cali)
+ 		goto skip_cali;
+ 
+ 	/* Calibrate SerDes receiver in loopback mode */
+@@ -4056,7 +4093,7 @@
+ 	return sds->ops->config_polarity(sds, tx_pol, rx_pol);
+ }
+ 
+-static void rtpcs_pcs_get_state(struct phylink_pcs *pcs, unsigned int neg_mode,
++static void rtpcs_pcs_get_state(struct phylink_pcs *pcs,
+ 				struct phylink_link_state *state)
+ {
+ 	struct rtpcs_link *link = rtpcs_phylink_pcs_to_link(pcs);
+@@ -4129,6 +4166,63 @@
+ 	mutex_unlock(&ctrl->lock);
+ }
+ 
++/*
++ * Optional per-lane register overrides from the firmware node:
++ * "realtek,sds-regs-override" = <page reg mask value> quadruplets, applied
++ * after every SerDes mode setup.  Lets a board correct lane registers the
++ * generic bring-up cannot know about (e.g. a fixed MAC-to-MAC link partner
++ * that needs forced RX signal-detect, or fiber media-type selects) without
++ * code changes.
++ */
++static int rtpcs_sds_parse_fwnode_overrides(struct device *dev,
++					    struct rtpcs_serdes *sds)
++{
++	int count;
++	u32 *vals;
++	int ret;
++
++	count = fwnode_property_count_u32(sds->fwnode, "realtek,sds-regs-override");
++	if (count <= 0)
++		return 0;
++
++	if (count % 4)
++		return dev_err_probe(dev, -EINVAL,
++				     "sds%u: malformed realtek,sds-regs-override\n",
++				     sds->id);
++
++	vals = devm_kcalloc(dev, count, sizeof(*vals), GFP_KERNEL);
++	if (!vals)
++		return -ENOMEM;
++
++	ret = fwnode_property_read_u32_array(sds->fwnode,
++					     "realtek,sds-regs-override", vals, count);
++	if (ret)
++		return ret;
++
++	sds->fwnode_overrides = vals;
++	sds->n_fwnode_overrides = count / 4;
++
++	return 0;
++}
++
++static void rtpcs_sds_apply_fwnode_overrides(struct rtpcs_serdes *sds)
++{
++	for (int i = 0; i < sds->n_fwnode_overrides; i++) {
++		const u32 *o = &sds->fwnode_overrides[i * 4];
++		u16 mask = o[2], val = o[3] & mask;
++
++		if (mask == 0xffff) {
++			rtpcs_sds_write(sds, o[0], o[1], val);
++		} else {
++			int cur = rtpcs_sds_read(sds, o[0], o[1]);
++
++			if (cur < 0)
++				continue;
++			rtpcs_sds_write(sds, o[0], o[1], ((u16)cur & ~mask) | val);
++		}
++	}
++}
++
+ static int rtpcs_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
+ 			    phy_interface_t interface, const unsigned long *advertising,
+ 			    bool permit_pause_to_mac)
+@@ -4171,6 +4265,14 @@
+ 
+ 	ret = sds->ops->set_autoneg(sds, neg_mode, advertising);
+ 
++	/* Board fwnode overrides have the final word over the generic
++	 * configuration (mode setup and autoneg alike). */
++	if (ret >= 0)
++		rtpcs_sds_apply_fwnode_overrides(sds);
++
++	dev_info(ctrl->dev, "SerDes %u configured: %s neg_mode %u\n",
++		 sds->id, phy_modes(interface), neg_mode);
++
+ out:
+ 	mutex_unlock(&ctrl->lock);
+ 	return ret;
+@@ -4399,6 +4501,13 @@
+ 		ret = devm_add_action_or_reset(dev, rtpcs_sds_put_fwnode, sds);
+ 		if (ret)
+ 			return ret;
++
++		sds->skip_rx_cali =
++			fwnode_property_present(sds->fwnode,
++						"realtek,skip-rx-calibration");
++		ret = rtpcs_sds_parse_fwnode_overrides(dev, sds);
++		if (ret)
++			return ret;
+ 	}
+ 
+ 	ret = rtpcs_map_links(dev, ctrl);
+@@ -4618,7 +4727,12 @@
+ 	},
+ 	.probe = rtpcs_probe,
+ };
+-module_platform_driver(rtpcs_driver);
++/*
++ * Linked into rtl930x-spi.ko: its module init registers this platform
++ * driver before the SPI probe spawns the child pcs device, so the bind is
++ * synchronous and ordered.
++ */
++struct platform_driver *rtl930x_pcs_platform_driver = &rtpcs_driver;
+ 
+ MODULE_AUTHOR("Markus Stockhausen <markus.stockhausen@gmx.de>");
+ MODULE_AUTHOR("Jonas Jelonek <jelonek.jonas@gmail.com>");

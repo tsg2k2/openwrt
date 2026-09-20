@@ -1,0 +1,75 @@
+pcs-rtl-otto: complete HISGMII (2.5G SGMII) SerDes support
+
+Handle HISGMII like its 2.5G sibling 2500BASE-X across PLL-speed,
+set_mode, config_hw_mode and tx_config, with the distinct PCS value 0x12,
+and advertise it in the 93xx SerDes capabilities and the phy-mode mapping.
+The CR1000A MoCA link (MXL3711, fixed-link MAC-to-MAC) runs HISGMII.
+
+--- a/pcs-rtl-otto.c
++++ b/pcs-rtl-otto.c
+@@ -120,6 +120,7 @@
+ #define RTPCS_93XX_SDS_MODE_QSGMII		0x06
+ #define RTPCS_93XX_SDS_MODE_USXGMII		0x0d
+ #define RTPCS_93XX_SDS_MODE_XSGMII		0x10
++#define RTPCS_93XX_SDS_MODE_HISGMII		0x12
+ #define RTPCS_93XX_SDS_MODE_2500BASEX		0x16
+ #define RTPCS_93XX_SDS_MODE_10GBASER		0x1a
+ #define RTPCS_93XX_SDS_MODE_OFF			0x1f
+@@ -327,6 +328,7 @@
+ 
+ 	/* mii modes */
+ 	RTPCS_SDS_MODE_SGMII,
++	RTPCS_SDS_MODE_HISGMII,
+ 	RTPCS_SDS_MODE_QSGMII,
+ 	RTPCS_SDS_MODE_XSGMII,
+ 	RTPCS_SDS_MODE_USXGMII,
+@@ -715,6 +717,9 @@
+ 	case PHY_INTERFACE_MODE_SGMII:
+ 		*hw_mode = RTPCS_SDS_MODE_SGMII;
+ 		break;
++	case PHY_INTERFACE_MODE_HSGMII:
++		*hw_mode = RTPCS_SDS_MODE_HISGMII;
++		break;
+ 	case PHY_INTERFACE_MODE_QSGMII:
+ 		*hw_mode = RTPCS_SDS_MODE_QSGMII;
+ 		break;
+@@ -829,6 +834,7 @@
+ 	case RTPCS_SDS_MODE_QSGMII:
+ 		*speed = RTPCS_SDS_PLL_SPD_1000;
+ 		break;
++	case RTPCS_SDS_MODE_HISGMII:
+ 	case RTPCS_SDS_MODE_2500BASEX:
+ 		*speed = RTPCS_SDS_PLL_SPD_2500;
+ 		break;
+@@ -1419,6 +1425,7 @@
+ 	[RTPCS_SDS_MODE_2500BASEX]		= RTPCS_93XX_SDS_MODE_2500BASEX,
+ 	[RTPCS_SDS_MODE_10GBASER]		= RTPCS_93XX_SDS_MODE_10GBASER,
+ 	[RTPCS_SDS_MODE_QSGMII]			= RTPCS_93XX_SDS_MODE_QSGMII,
++	[RTPCS_SDS_MODE_HISGMII]		= RTPCS_93XX_SDS_MODE_HISGMII,
+ 	[RTPCS_SDS_MODE_XSGMII]			= RTPCS_93XX_SDS_MODE_XSGMII,
+ 	[RTPCS_SDS_MODE_USXGMII]		= RTPCS_93XX_SDS_MODE_USXGMII,
+ };
+@@ -1828,6 +1835,7 @@
+ 		__set_bit(RTPCS_SDS_MODE_USXGMII, sds->supported_modes);
+ 
+ 		__set_bit(RTPCS_SDS_MODE_1000BASEX, sds->supported_modes);
++		__set_bit(RTPCS_SDS_MODE_HISGMII, sds->supported_modes);
+ 		__set_bit(RTPCS_SDS_MODE_2500BASEX, sds->supported_modes);
+ 		__set_bit(RTPCS_SDS_MODE_10GBASER, sds->supported_modes);
+ 		break;
+@@ -2121,6 +2129,7 @@
+ 	switch (hw_mode) {
+ 	case RTPCS_SDS_MODE_SGMII:
+ 	case RTPCS_SDS_MODE_1000BASEX:
++	case RTPCS_SDS_MODE_HISGMII:
+ 	case RTPCS_SDS_MODE_2500BASEX:
+ 	case RTPCS_SDS_MODE_10GBASER:
+ 		ret = rtpcs_93xx_sds_set_ip_mode(sds, hw_mode);
+@@ -3070,6 +3079,7 @@
+ 		rtpcs_sds_write(sds, PAGE_ANA_10G_EXT, 0x14, 0xE008);
+ 		break;
+ 
++	case RTPCS_SDS_MODE_HISGMII:
+ 	case RTPCS_SDS_MODE_2500BASEX:
+ 		ret = rtpcs_sds_apply_config(sds, rtpcs_930x_sds_cfg_ana_3g,
+ 					     ARRAY_SIZE(rtpcs_930x_sds_cfg_ana_3g));

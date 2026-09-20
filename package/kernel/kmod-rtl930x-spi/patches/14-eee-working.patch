@@ -1,0 +1,138 @@
+rtl930x: working EEE - 6.12 get path, link-event re-apply, default on
+
+Make 802.3az EEE actually function on the CR1000A user ports:
+
+- Add the get_mac_eee op: the 6.12 DSA core requires it for
+  ethtool --show-eee (the 6.18-era driver relies on a pure-phylink get
+  path that does not exist here).
+
+- Fix the disable path in rtldsa_930x_set_mac_eee: sw_w32_mask with a
+  zero clear-mask never cleared the per-rate EEE bits, so EEE could be
+  enabled but never disabled again.
+
+- Re-apply the MAC EEE state in 93xx mac_link_up, gated on the PHY's
+  negotiated enable_tx_lpi: mac_config zeroes the whole force-mode
+  register, so a set-and-forget enable would be wiped on the first
+  reconfigure (e.g. every lan10g rate change), leaving the PHY
+  negotiating LPI the MAC no longer understands.
+
+- Default EEE to on for EEE-capable PHY ports at first port_enable
+  (OEM parity - the stock firmware enables EEE on all data ports).
+  ethtool --set-eee remains the override and is applied once per port,
+  so a user setting survives ifdown/ifup. The USXGMII port (AQR113C
+  10G) is excluded from the default: with EEE negotiated there the
+  ingress direction goes hard-dead (HW-validated against a 10GBASE-T
+  EEE-capable link partner); manual enable remains possible.
+
+- Make rtldsa_set_mac_eee strictly per-port: the upstream global
+  init_eee() loop would force MAC EEE on every PHY port, including
+  fixed SerDes links (MoCA) whose partner never negotiates LPI.
+
+--- a/rtl-otto.h
++++ b/rtl-otto.h
+@@ -171,6 +171,8 @@
+ #define RTL930X_MAC_EEE_ABLTY			(0xCB34)
+ #define RTL930X_EEE_CTRL(p)			(0x3274 + ((p) << 6))
+ #define RTL930X_EEEP_PORT_CTRL(p)		(0x3278 + ((p) << 6))
++/* MAC_FORCE_MODE_CTRL per-rate EEE enables: 100M/500M/1G/2.5G/5G/10G */
++#define RTL930X_EEE_MODE_MASK			(0x3f << 10)
+ 
+ #define RTL931X_MAC_EEE_ABLTY			(0x0f08)
+ 
+@@ -845,6 +847,7 @@
+ struct rtldsa_port {
+ 	bool enable:1;
+ 	bool phy:1;
++	bool eee_defaulted:1;
+ 	bool isolated:1;
+ 	bool rate_police_egress:1;
+ 	bool rate_police_ingress:1;
+--- a/rtl930x.c
++++ b/rtl930x.c
+@@ -462,7 +462,7 @@
+ 	v = enable ? 0x3f : 0x0;
+ 
+ 	/* Set EEE/EEEP state for 100, 500, 1000MBit and 2.5, 5 and 10GBit */
+-	sw_w32_mask(0, v << 10, rtl930x_mac_force_mode_ctrl(port));
++	sw_w32_mask(RTL930X_EEE_MODE_MASK, v << 10, rtl930x_mac_force_mode_ctrl(port));
+ 
+ 	/* Set TX/RX EEE state */
+ 	v = enable ? 0x3 : 0x0;
+--- a/dsa.c
++++ b/dsa.c
+@@ -440,6 +440,9 @@
+ 	mcr = sw_r32(priv->r->mac_force_mode_ctrl(port));
+ 
+ 	if (priv->family_id == RTL9300_FAMILY_ID) {
++		bool lpi = priv->ports[port].eee_enabled &&
++			   phydev && phydev->enable_tx_lpi;
++
+ 		mcr &= ~RTL930X_RX_PAUSE_EN;
+ 		mcr &= ~RTL930X_TX_PAUSE_EN;
+ 		mcr &= ~RTL930X_DUPLEX_MODE;
+@@ -455,6 +458,14 @@
+ 			mcr |= RTL930X_DUPLEX_MODE;
+ 		if (dsa_port_is_cpu(dp) || priv->ports[port].phy)
+ 			mcr |= RTL930X_FORCE_EN;
++
++		/* mac_config zeroes the force-mode register, so the MAC EEE
++		 * state cannot be set-and-forget: re-apply it on every link
++		 * event, gated on what the PHY actually negotiated. */
++		mcr &= ~RTL930X_EEE_MODE_MASK;
++		if (lpi)
++			mcr |= RTL930X_EEE_MODE_MASK;
++		sw_w32(lpi ? 0x3 : 0x0, RTL930X_EEE_CTRL(port));
+ 	}
+ 
+ 	pr_debug("%s port %d, mode %x, speed %d, duplex %d, txpause %d, rxpause %d: set mcr=%08x\n",
+@@ -546,6 +557,26 @@
+ 		sw_w32_mask(BIT(port), 0, RTL930X_L2_PORT_DABLK_CTRL);
+ 	}
+ 
++	/* EEE defaults to on for EEE-capable PHY ports (OEM parity). Done
++	 * once per port so an ethtool --set-eee override is not undone by a
++	 * later ifdown/ifup cycle. The MAC side only enters LPI once the
++	 * PHY has actually negotiated EEE (see phylink_mac_link_up). The
++	 * AQR113C 10G port needs its system-interface EEE enabled too,
++	 * which the aquantia PHY driver handles for USXGMII. */
++	if (phydev && !priv->ports[port].eee_defaulted &&
++	    !linkmode_empty(phydev->supported_eee)) {
++		struct ethtool_keee e = {};
++
++		e.eee_enabled = true;
++		e.tx_lpi_enabled = true;
++
++		priv->r->set_mac_eee(priv, port, true);
++		if (phy_ethtool_set_eee(phydev, &e))
++			pr_warn("%s: port %d: EEE advertisement failed\n",
++				__func__, port);
++		priv->ports[port].eee_defaulted = true;
++	}
++
+ 	return 0;
+ }
+ 
+@@ -659,17 +690,14 @@
+ {
+ 	struct rtl838x_switch_priv *priv = ds->priv;
+ 
+-	if (e->eee_enabled && !priv->eee_enabled) {
+-		pr_info("Globally enabling EEE\n");
+-		priv->r->init_eee(priv, true);
+-	}
+-
++	/* Per-port only: the upstream global init_eee() would force the MAC
++	 * EEE state on every PHY port, including fixed SerDes links whose
++	 * partner never negotiates LPI. */
+ 	priv->r->set_mac_eee(priv, port, e->eee_enabled);
++	priv->eee_enabled = true;
+ 
+-	if (e->eee_enabled)
+-		pr_info("Enabled EEE for port %d\n", port);
+-	else
+-		pr_info("Disabled EEE for port %d\n", port);
++	pr_info("%s EEE for port %d\n",
++		e->eee_enabled ? "Enabled" : "Disabled", port);
+ 
+ 	return 0;
+ }

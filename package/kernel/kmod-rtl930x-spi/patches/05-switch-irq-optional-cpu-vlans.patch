@@ -1,0 +1,69 @@
+rtl83xx: optional switch IRQ + CPU in user VLANs
+
+Make the switch interrupt optional (none wired in SPI mode), always include
+the CPU port in user VLANs, and untag egress frames for SPI mode.
+
+===================================================================
+--- a/common.c
++++ b/common.c
+@@ -996,13 +996,15 @@
+ 	priv->r->set_port_reg_le(priv->irq_mask, priv->r->isr_port_link_sts_chg);
+ 	priv->r->set_port_reg_le(priv->irq_mask, priv->r->imr_port_link_sts_chg);
+ 
+-	priv->link_state_irq = platform_get_irq(pdev, 0);
+-	pr_info("LINK state irq: %d\n", priv->link_state_irq);
+-	err = request_irq(priv->link_state_irq, rtldsa_switch_irq,
+-			  IRQF_SHARED, "rtldsa-link-state", priv->ds);
+-	if (err) {
+-		dev_err(dev, "Error setting up switch interrupt.\n");
+-		/* Need to free allocated switch here */
++	priv->link_state_irq = platform_get_irq_optional(pdev, 0);
++	if (priv->link_state_irq < 0) {
++		dev_dbg(dev, "No switch interrupt defined, using polling\n");
++		priv->link_state_irq = 0;
++	} else {
++		err = request_irq(priv->link_state_irq, rtldsa_switch_irq,
++				  IRQF_SHARED, "rtldsa-link-state", priv->ds);
++		if (err)
++			dev_warn(dev, "Failed to request switch interrupt: %d\n", err);
+ 	}
+ 
+ 	/* Enable interrupts for switch, on RTL931x, the IRQ is always on globally */
+--- a/dsa.c
++++ b/dsa.c
+@@ -492,7 +492,7 @@
+ 	if (priv->tag_proto == DSA_TAG_PROTO_RTL_OTTO_8021Q)
+ 		sw_w32(0, RTL930X_VLAN_PORT_TAG_CTRL(port));
+ 	else
+-		priv->r->vlan_port_keep_tag_set(port, 0, 1);
++		priv->r->vlan_port_keep_tag_set(port, 0, 0);
+ 
+ 	if (dsa_is_cpu_port(ds, port))
+ 		return 0;
+@@ -925,13 +925,13 @@
+ 		if (internal)
+ 			sw_w32(0, RTL930X_VLAN_PORT_TAG_CTRL(dp->index));
+ 		else
+-			priv->r->vlan_port_keep_tag_set(dp->index, 0, 1);
++			priv->r->vlan_port_keep_tag_set(dp->index, 0, 0);
+ 	}
+ 
+ 	if (internal)
+ 		sw_w32(0, RTL930X_VLAN_PORT_TAG_CTRL(priv->r->cpu_port));
+ 	else
+-		priv->r->vlan_port_keep_tag_set(priv->r->cpu_port, 0, 1);
++		priv->r->vlan_port_keep_tag_set(priv->r->cpu_port, 0, 0);
+ }
+ 
+ static int rtldsa_tag_8021q_vlan_add(struct dsa_switch *ds, int port, u16 vid,
+--- a/vlan.c
++++ b/vlan.c
+@@ -868,6 +868,8 @@
+ 	info.untagged_ports &= info.member_ports;
+ 
+ 	info.member_ports |= BIT_ULL(port);
++	if (port != priv->r->cpu_port)
++		info.member_ports |= BIT_ULL(priv->r->cpu_port);
+ 	if (vlan->flags & BRIDGE_VLAN_INFO_UNTAGGED)
+ 		info.untagged_ports |= BIT_ULL(port);
+ 	else

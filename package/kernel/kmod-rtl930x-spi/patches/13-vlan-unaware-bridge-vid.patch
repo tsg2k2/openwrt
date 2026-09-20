@@ -1,0 +1,110 @@
+rtl83xx: map VLAN-unaware bridge VID 0 to the searched VLAN for FDB/MDB
+
+A VLAN-unaware bridge installs its switchdev FDB/MDB entries with VID 0,
+but the lookup engine searches the VLAN the packet classified into on
+ingress.  Under the OTTO tagger the SPI-mode bring-up classifies all
+untagged traffic into VLAN 1, so VID 0 must map to 1.  Under the 802.1Q
+tagger ingress classifies into the tag_8021q PVID instead (bridge VID
+for bridged ports, standalone VID otherwise); installing the entries in
+VLAN 1 leaves every lookup a miss, so all to-CPU traffic is treated as
+unknown unicast: it is flood-replicated to every bridge port (blasting
+a full copy of the stream at each LAN client) and the replicated flood
+is paced to ~937 Mbit/s aggregate, far below the 10G CPU link.  Map
+VID 0 according to the active tagger and the entry's dsa_db.
+
+The bridge number is recovered from a member port because the DSA core
+zeroes db.bridge.num for switches that do not declare fdb_isolation.
+
+===================================================================
+--- a/dsa.c
++++ b/dsa.c
+@@ -2181,6 +2181,49 @@
+ 	}
+ }
+ 
++/* A VLAN-unaware bridge installs its switchdev FDB/MDB entries with VID 0,
++ * but the lookup engine searches the VLAN the packet actually classified
++ * into.  Under the OTTO tagger the SPI-mode bring-up classifies all untagged
++ * traffic into VLAN 1 (learned entries carry rvid 1).  Under the 802.1Q
++ * tagger ingress traffic classifies into the tag_8021q PVID instead: the
++ * bridge VID for bridged ports, the standalone VID for unbridged ports.
++ * Remap VID 0 accordingly so the entries land in the VLAN that is searched;
++ * a stale mapping leaves every to-CPU lookup as a miss, and the resulting
++ * unknown-unicast flood is replicated to all bridge ports and paced far
++ * below the port speed. */
++static u16 rtldsa_bridge_vid(struct rtl838x_switch_priv *priv,
++			     const struct dsa_db *db, u16 vid)
++{
++	if (vid)
++		return vid;
++
++	if (priv->tag_proto == DSA_TAG_PROTO_RTL_OTTO_8021Q) {
++		switch (db->type) {
++		case DSA_DB_BRIDGE: {
++			struct dsa_port *dp;
++
++			/* The DSA core zeroes db->bridge.num unless the
++			 * driver declares fdb_isolation; recover the bridge
++			 * number from a member port instead.
++			 */
++			dsa_switch_for_each_user_port(dp, priv->ds) {
++				if (dsa_port_bridge_dev_get(dp) != db->bridge.dev)
++					continue;
++				return dsa_tag_8021q_bridge_vid(
++					dsa_port_bridge_num_get(dp));
++			}
++			break;
++		}
++		case DSA_DB_PORT:
++			return dsa_tag_8021q_standalone_vid(db->dp);
++		default:
++			break;
++		}
++	}
++
++	return 1;
++}
++
+ static int rtldsa_port_fdb_add(struct dsa_switch *ds, int port,
+ 			       const unsigned char *addr, u16 vid,
+ 			       const struct dsa_db db)
+@@ -2189,9 +2232,11 @@
+ 	u64 mac = ether_addr_to_u64(addr);
+ 	struct rtl838x_l2_entry e;
+ 	int err = 0, idx;
+-	u64 seed = priv->r->l2_hash_seed(mac, vid);
++	u64 seed = priv->r->l2_hash_seed(mac, rtldsa_bridge_vid(priv, &db, vid));
+ 	int lag_group = rtldsa_find_lag_group_from_port(priv, port);
+ 
++	vid = rtldsa_bridge_vid(priv, &db, vid);
++
+ 	if (lag_group >= 0 && priv->r->prepare_lag_fdb) {
+ 		priv->r->prepare_lag_fdb(&e, lag_group);
+ 	} else {
+@@ -2238,7 +2283,7 @@
+ 	u64 mac = ether_addr_to_u64(addr);
+ 	struct rtl838x_l2_entry e;
+ 	int err = 0, idx;
+-	u64 seed = priv->r->l2_hash_seed(mac, vid);
++	u64 seed = priv->r->l2_hash_seed(mac, rtldsa_bridge_vid(priv, &db, vid));
+ 	int lag_group = rtldsa_find_lag_group_from_port(priv, port);
+ 
+ 	if (lag_group >= 0 && priv->r->prepare_lag_fdb)
+@@ -2343,7 +2388,7 @@
+ 	u64 mac = ether_addr_to_u64(mdb->addr);
+ 	struct rtl838x_l2_entry e;
+ 	int err = 0, idx;
+-	int vid = mdb->vid;
++	int vid = rtldsa_bridge_vid(priv, &db, mdb->vid);
+ 	u64 seed = priv->r->l2_hash_seed(mac, vid);
+ 	int mc_group;
+ 
+@@ -2422,7 +2467,7 @@
+ 	u64 mac = ether_addr_to_u64(mdb->addr);
+ 	struct rtl838x_l2_entry e;
+ 	int err = 0, idx;
+-	int vid = mdb->vid;
++	int vid = rtldsa_bridge_vid(priv, &db, mdb->vid);
+ 	u64 seed = priv->r->l2_hash_seed(mac, vid);
+ 	u64 portmask;
+ 

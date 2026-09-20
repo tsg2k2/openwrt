@@ -1,0 +1,35 @@
+rtl83xx: fix -EEXIST on module reload
+
+Release stale dsa_port entries that dsa_switch_shutdown() leaves in the DSA
+tree so a subsequent probe (module reload) does not fail.
+
+===================================================================
+--- a/common.c
++++ b/common.c
+@@ -1766,6 +1766,26 @@ static void rtl83xx_sw_remove(struct pla
+ 
+ 	dsa_switch_shutdown(priv->ds);
+ 
++	/* dsa_switch_shutdown() leaves stale dsa_port entries in dst->ports,
++	 * causing -EEXIST in dsa_switch_find() on the next probe (module reload).
++	 * Manually release our ports and reset dst->setup so reload works cleanly. */
++	{
++		struct dsa_switch_tree *dst = priv->ds->dst;
++		struct dsa_port *dp, *next;
++
++		if (dst) {
++			list_for_each_entry_safe(dp, next, &dst->ports, list) {
++				if (dp->ds == priv->ds) {
++					list_del(&dp->list);
++					kfree(dp);
++				}
++			}
++			dst->setup = false;
++			pr_info("rtl83xx: released switch ports from DSA tree %d\n",
++				dst->index);
++		}
++	}
++
+ 	destroy_workqueue(priv->wq);
+ 
+ 	dev_set_drvdata(&pdev->dev, NULL);

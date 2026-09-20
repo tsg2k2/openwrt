@@ -1,0 +1,85 @@
+rtl83xx: external-SPI port/bridge setup
+
+Default-VLAN0 untagged on all ports, drop the SA/DA-block on ports (enable
+HW learning + flooding), allow fixed-link ports without a phy-handle, and
+clear SA/DA-block at user-port setup.
+
+The otto-mdio / otto-switch DT lookups in rtl83xx_mdio_probe() pass natively:
+the board provides a "realtek,otto-mdio" controller (the backported mainline
+rtl9301-mdio driver running over the switch syscon regmap) and the switch
+node carries the "realtek,otto-switch" compatible.
+
+===================================================================
+--- a/common.c
++++ b/common.c
+@@ -189,8 +189,9 @@
+ 		priv->ports[pn].has_pcs = fwnode_property_present(of_fwnode_handle(dn),
+ 								  "pcs-handle");
+ 		if (pn != priv->r->cpu_port && !phy_node && !priv->ports[pn].has_pcs) {
+-			dev_err(priv->dev, "Port node %d has neither pcs-handle nor phy-handle\n", pn);
+-			continue;
++			if (!of_get_child_by_name(dn, "fixed-link"))
++				dev_warn(priv->dev, "Port %d: no pcs-handle, phy-handle or fixed-link\n", pn);
++			/* fixed-link ports proceed: .phy stays false, has_pcs stays false */
+ 		}
+ 
+ 		priv->ports[pn].leds_on_this_port = 0;
+--- a/dsa.c
++++ b/dsa.c
+@@ -174,6 +174,13 @@
+ 		if (priv->ports[i].phy || priv->ports[i].has_pcs) {
+ 			priv->ports[i].pm = BIT_ULL(priv->r->cpu_port);
+ 			priv->r->traffic_set(i, BIT_ULL(i));
++			/* RTL930x resets SABLK/DABLK to 0x0FFFFFFF (all ports blocked).
++			 * Clear here at setup so fixed-link ports forward without waiting
++			 * for each DSA slave interface to be individually opened. */
++			if (priv->family_id == RTL9300_FAMILY_ID) {
++				sw_w32_mask(BIT(i), 0, RTL930X_L2_PORT_SABLK_CTRL);
++				sw_w32_mask(BIT(i), 0, RTL930X_L2_PORT_DABLK_CTRL);
++			}
+ 		}
+ 	}
+ 	priv->r->traffic_set(priv->r->cpu_port, BIT_ULL(priv->r->cpu_port));
+@@ -496,10 +503,11 @@
+ 	/* add all other ports in the same bridge to switch mask of port */
+ 	priv->r->traffic_set(port, priv->ports[port].pm);
+ 
+-	/* TODO: Figure out if this is necessary */
++	/* Unblock SA/DA for this port: hardware default is all-ports-blocked.
++	 * Clear the bit to allow unknown-source learning and unknown-dest flooding. */
+ 	if (priv->family_id == RTL9300_FAMILY_ID) {
+-		sw_w32_mask(0, BIT(port), RTL930X_L2_PORT_SABLK_CTRL);
+-		sw_w32_mask(0, BIT(port), RTL930X_L2_PORT_DABLK_CTRL);
++		sw_w32_mask(BIT(port), 0, RTL930X_L2_PORT_SABLK_CTRL);
++		sw_w32_mask(BIT(port), 0, RTL930X_L2_PORT_DABLK_CTRL);
+ 	}
+ 
+ 	return 0;
+@@ -521,6 +529,12 @@
+ 	/* remove all other ports from switch mask of port */
+ 	priv->r->traffic_set(port, 0);
+ 
++	/* Re-block SA/DA on this port now that it is disabled. */
++	if (priv->family_id == RTL9300_FAMILY_ID) {
++		sw_w32_mask(0, BIT(port), RTL930X_L2_PORT_SABLK_CTRL);
++		sw_w32_mask(0, BIT(port), RTL930X_L2_PORT_DABLK_CTRL);
++	}
++
+ 	priv->ports[port].enable = false;
+ }
+ 
+--- a/vlan.c
++++ b/vlan.c
+@@ -165,6 +165,12 @@
+ 	}
+ 	priv->r->vlan_set_tagged(0, &info);
+ 
++	/* Mark all ports as untagged-egress for VLAN 0.  The UNTAG table
++	 * (TBL_2) defaults to all-zero (all ports tagged), so without this
++	 * RTL9303 inserts a 802.1Q VLAN 0 tag on egress to user ports and
++	 * on the CPU port -- end devices and the CPU interface discard it. */
++	priv->r->vlan_set_untagged(0, info.member_ports);
++
+ 	/* Set forwarding action based on inner VLAN tag */
+ 	for (int i = 0; i < priv->r->cpu_port; i++)
+ 		priv->r->vlan_fwd_on_inner(i, true);
