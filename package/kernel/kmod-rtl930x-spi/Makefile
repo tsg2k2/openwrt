@@ -51,7 +51,6 @@ define Build/Prepare
 	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/08-vlan-stp-untagged-bridging.patch
 	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/09-cpu-port-wire-tag.patch
 	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/10-counters-spi-table-lock.patch
-	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/12-dsa-93xx-hsgmii-caps.patch
 	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/13-vlan-unaware-bridge-vid.patch
 	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/14-eee-working.patch
 	patch -p1 -d $(PKG_BUILD_DIR) -i $(CURDIR)/patches/16-external-spi-skip-soc-dependency-checks.patch

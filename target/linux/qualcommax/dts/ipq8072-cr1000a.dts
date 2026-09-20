@@ -333,7 +333,7 @@
 					 * HISGMII, the MXL PHY driver sets its MAC PCS
 					 * to match.  Matches the OEM (SDS7 = HISGMII).
 					 */
-					phy-mode = "hsgmii";
+					phy-mode = "2500base-x";
 				};
 
 				port@27 {
@@ -502,6 +502,12 @@
 					 */
 					realtek,sds-regs-override =
 						<0x00 0x02 0x0100 0x0100>;
+					/*
+					 * MoCA runs HSGMII (rate-adapting 2.5G
+					 * SGMII), not clause-37 2500BASE-X: same
+					 * lane rate, different mode value.
+					 */
+					realtek,hisgmii;
 				};
 				serdes9: serdes@9 {
 					reg = <9>;

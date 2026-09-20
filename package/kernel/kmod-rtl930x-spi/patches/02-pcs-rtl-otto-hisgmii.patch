@@ -1,9 +1,29 @@
-pcs-rtl-otto: complete HISGMII (2.5G SGMII) SerDes support
+pcs-rtl-otto: select HSGMII on a 2500BASE-X lane via realtek,hisgmii
 
-Handle HISGMII like its 2.5G sibling 2500BASE-X across PLL-speed,
-set_mode, config_hw_mode and tx_config, with the distinct PCS value 0x12,
-and advertise it in the 93xx SerDes capabilities and the phy-mode mapping.
-The CR1000A MoCA link (MXL3711, fixed-link MAC-to-MAC) runs HISGMII.
+HSGMII (HiSGMII, rate-adapting 2.5G SGMII) and clause-37 2500BASE-X share
+the 3.125 GBaud line rate, the analog setup, the CMU page, the PLL speed and
+the TX config on this SerDes.  The only thing that differs is the mode value
+programmed into the lane: 0x12 instead of 0x16.
+
+That is a PCS-internal hardware detail, not a distinct MAC-PHY interface, so
+express it as a per-lane vendor property rather than a new phy_interface_t.
+Boards keep the standard phy-mode = "2500base-x" and mark the lane:
+
+	serdes@7 {
+		reg = <7>;
+		realtek,hisgmii;
+	};
+
+Doing it the other way - a PHY_INTERFACE_MODE_HSGMII of our own - meant
+patching four core kernel files and adding a HISGMII case to every switch
+over the mode enum.  It broke twice: once when 6.18 moved the enum and the
+interface->capability table, and once when upstream added a new switch
+(rtpcs_93xx_sds_get_cmu_page()) that our patch knew nothing about, which
+silently dropped the CR1000A's MoCA link to 1G.  Riding on 2500BASE-X means
+upstream's own cases cover the mode for free.
+
+The property is only meaningful on RTL93xx; other families never set it, so
+their behaviour is unchanged.
 
 --- a/pcs-rtl-otto.c
 +++ b/pcs-rtl-otto.c
@@ -15,69 +35,38 @@ The CR1000A MoCA link (MXL3711, fixed-link MAC-to-MAC) runs HISGMII.
  #define RTPCS_93XX_SDS_MODE_2500BASEX		0x16
  #define RTPCS_93XX_SDS_MODE_10GBASER		0x1a
  #define RTPCS_93XX_SDS_MODE_OFF			0x1f
-@@ -327,6 +328,7 @@
- 
- 	/* mii modes */
- 	RTPCS_SDS_MODE_SGMII,
-+	RTPCS_SDS_MODE_HISGMII,
- 	RTPCS_SDS_MODE_QSGMII,
- 	RTPCS_SDS_MODE_XSGMII,
- 	RTPCS_SDS_MODE_USXGMII,
-@@ -715,6 +717,9 @@
- 	case PHY_INTERFACE_MODE_SGMII:
- 		*hw_mode = RTPCS_SDS_MODE_SGMII;
- 		break;
-+	case PHY_INTERFACE_MODE_HSGMII:
-+		*hw_mode = RTPCS_SDS_MODE_HISGMII;
-+		break;
- 	case PHY_INTERFACE_MODE_QSGMII:
- 		*hw_mode = RTPCS_SDS_MODE_QSGMII;
- 		break;
-@@ -829,6 +834,7 @@
- 	case RTPCS_SDS_MODE_QSGMII:
- 		*speed = RTPCS_SDS_PLL_SPD_1000;
- 		break;
-+	case RTPCS_SDS_MODE_HISGMII:
- 	case RTPCS_SDS_MODE_2500BASEX:
- 		*speed = RTPCS_SDS_PLL_SPD_2500;
- 		break;
-@@ -1419,6 +1425,7 @@
- 	[RTPCS_SDS_MODE_2500BASEX]		= RTPCS_93XX_SDS_MODE_2500BASEX,
- 	[RTPCS_SDS_MODE_10GBASER]		= RTPCS_93XX_SDS_MODE_10GBASER,
- 	[RTPCS_SDS_MODE_QSGMII]			= RTPCS_93XX_SDS_MODE_QSGMII,
-+	[RTPCS_SDS_MODE_HISGMII]		= RTPCS_93XX_SDS_MODE_HISGMII,
- 	[RTPCS_SDS_MODE_XSGMII]			= RTPCS_93XX_SDS_MODE_XSGMII,
- 	[RTPCS_SDS_MODE_USXGMII]		= RTPCS_93XX_SDS_MODE_USXGMII,
+@@ -439,6 +440,7 @@
+ 	u8 num_of_links;
+ 	bool first_start;
+ 	bool skip_rx_cali;	/* board quirk: skip the loopback RX-cal on this lane */
++	bool hisgmii;		/* 2.5G lane runs HSGMII, not clause-37 2500BASE-X */
+ 	const u32 *fwnode_overrides;	/* <page reg mask value> quadruplets */
+ 	int n_fwnode_overrides;
  };
-@@ -1828,6 +1835,7 @@
- 		__set_bit(RTPCS_SDS_MODE_USXGMII, sds->supported_modes);
+@@ -901,6 +903,8 @@
+ 		return -EINVAL;
  
- 		__set_bit(RTPCS_SDS_MODE_1000BASEX, sds->supported_modes);
-+		__set_bit(RTPCS_SDS_MODE_HISGMII, sds->supported_modes);
- 		__set_bit(RTPCS_SDS_MODE_2500BASEX, sds->supported_modes);
- 		__set_bit(RTPCS_SDS_MODE_10GBASER, sds->supported_modes);
- 		break;
-@@ -1843,6 +1851,7 @@
- 	case RTPCS_SDS_MODE_SGMII:
- 	case RTPCS_SDS_MODE_1000BASEX:
- 		return PAGE_ANA_1G2;
-+	case RTPCS_SDS_MODE_HISGMII:
- 	case RTPCS_SDS_MODE_2500BASEX:
- 		return PAGE_ANA_3G1;
- 	case RTPCS_SDS_MODE_QSGMII:
-@@ -2121,6 +2130,7 @@
- 	switch (hw_mode) {
- 	case RTPCS_SDS_MODE_SGMII:
- 	case RTPCS_SDS_MODE_1000BASEX:
-+	case RTPCS_SDS_MODE_HISGMII:
- 	case RTPCS_SDS_MODE_2500BASEX:
- 	case RTPCS_SDS_MODE_10GBASER:
- 		ret = rtpcs_93xx_sds_set_ip_mode(sds, hw_mode);
-@@ -3070,6 +3080,7 @@
- 		rtpcs_sds_write(sds, PAGE_ANA_10G_EXT, 0x14, 0xE008);
- 		break;
+ 	val = cfg->sds_hw_mode_vals[hw_mode];
++	if (sds->hisgmii && hw_mode == RTPCS_SDS_MODE_2500BASEX)
++		val = RTPCS_93XX_SDS_MODE_HISGMII;
+ 	if (val < 0)
+ 		return -EOPNOTSUPP;
  
-+	case RTPCS_SDS_MODE_HISGMII:
- 	case RTPCS_SDS_MODE_2500BASEX:
- 		ret = rtpcs_sds_apply_config(sds, rtpcs_930x_sds_cfg_ana_3g,
- 					     ARRAY_SIZE(rtpcs_930x_sds_cfg_ana_3g));
+@@ -1807,6 +1811,8 @@
+ 		return -EINVAL;
+ 
+ 	raw = sds->ctrl->cfg->sds_hw_mode_vals[hw_mode];
++	if (sds->hisgmii && hw_mode == RTPCS_SDS_MODE_2500BASEX)
++		raw = RTPCS_93XX_SDS_MODE_HISGMII;
+ 	if (raw < 0)
+ 		return -EOPNOTSUPP;
+ 
+@@ -4631,6 +4637,8 @@
+ 		sds->skip_rx_cali =
+ 			fwnode_property_present(sds->fwnode,
+ 						"realtek,skip-rx-calibration");
++		sds->hisgmii = fwnode_property_present(sds->fwnode,
++						       "realtek,hisgmii");
+ 		ret = rtpcs_sds_parse_fwnode_overrides(dev, sds);
+ 		if (ret)
+ 			return ret;
