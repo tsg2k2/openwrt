@@ -277,6 +277,15 @@
 				     "syscon";
 			reg = <0>;
 
+			/*
+			 * Its own DSA tree.  The IPQ PPE switch is tree 0
+			 * switch 0, and this one hangs off one of that tree's
+			 * USER ports rather than being a cross-chip peer, so
+			 * sharing a tree collides:
+			 * "A DSA switch with index 0 already exists in tree 0".
+			 */
+			dsa,member = <1 0>;
+
 			ethernet-ports {
 				#address-cells = <1>;
 				#size-cells = <0>;
@@ -414,7 +423,19 @@
 			 * syscon regmap.  The PCS bring-up reads/writes the
 			 * SerDes pages through this bus.
 			 */
-			mdio-serdes {
+			/*
+			 * Upstream's rtl83xx now reaches the switch tables
+			 * through drivers/soc/realtek/otto_table.c, which takes
+			 * its regmap from THIS node's parent - so it has to be a
+			 * child of the switch syscon, like the buses below.
+			 * Without it the switch refuses to probe:
+			 * "error -ENODEV: no switch table access".
+			 */
+			table {
+				compatible = "realtek,otto-table";
+			};
+
+			serdes_mdio: mdio-serdes {
 				compatible = "realtek,rtl9301-serdes-mdio",
 					     "realtek,otto-serdes-mdio";
 			};
@@ -431,6 +452,13 @@
 			pcs {
 				compatible = "realtek,rtl9301-pcs",
 					     "realtek,otto-pcs";
+				/*
+				 * The PCS reaches the SerDes pages through the
+				 * clause-45 bus above; upstream now requires
+				 * the link to be explicit ("MDIO parent bus
+				 * not found" otherwise).
+				 */
+				mdio-parent-bus = <&serdes_mdio>;
 				#address-cells = <1>;
 				#size-cells = <0>;
 
@@ -514,6 +542,21 @@
 &edma {
 	status = "okay";
 };
+
+/*
+ * UNIPHY1 carries ESS port 5 (10GBase-R to the RTL9303) and UNIPHY2 carries
+ * ESS port 6 (USXGMII to the AQR113C).  ipq8074-ess.dtsi ships them disabled,
+ * and the PPE refuses a port whose PCS lane is not enabled
+ * ("couldn't find a PCS for usxgmii").
+ */
+&uniphy1 {
+	status = "okay";
+};
+
+&uniphy2 {
+	status = "okay";
+};
+
 
 &qpic_bam {
 	status = "okay";

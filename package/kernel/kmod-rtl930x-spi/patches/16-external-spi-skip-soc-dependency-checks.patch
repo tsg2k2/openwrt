@@ -1,0 +1,100 @@
+rtl83xx: skip the SoC-topology dependency checks in external-SPI mode
+
+The driver gates its probe on three checks that describe the Realtek SoC's
+own layout.  None of them can pass on a board where the RTL9303 is an
+external SPI slave, and upstream dropped the CONFIG_NET_DSA_RTL83XX_EXTERNAL_SPI
+guards this package used to rely on:
+
+  - rtldsa_mdio_loaded() looks for a "realtek,otto-mdio" node.  There is
+    none here: the MDIO and SerDes buses are children of the SPI switch
+    syscon and are already probed by the time we run.  It returned -ENODEV.
+
+  - rtldsa_ethernet_loaded() wants the conduit to be a platform ethernet
+    device.  Ours is another switch's DSA user port, so of_find_device_by_node()
+    never resolves it.  dsa_register_switch() resolves the conduit properly
+    and defers on its own if it is not up yet.
+
+  - rtldsa_phys_load_deferred() waits for every DT port's PHY driver to
+    bind.  The user-port PHYs hang off an MDIO bus THIS driver creates, so
+    they cannot exist before we probe; and an unrelated late-loading PHY
+    module (the MoCA PHY on the SoC bus) held the whole switch in deferred
+    probe.  phylink defers per port instead.
+
+--- a/dsa/common.c
++++ b/dsa/common.c
+@@ -95,6 +95,7 @@
+ 	return v;
+ }
+ 
++#ifndef CONFIG_NET_DSA_RTL83XX_EXTERNAL_SPI
+ static bool rtldsa_phy_load_deferred(struct phy_device *phydev)
+ {
+ 	struct device *d = &phydev->mdio.dev;
+@@ -104,9 +105,17 @@
+ 
+ 	return driver_deferred_probe_check_state(d) == -EPROBE_DEFER;
+ }
++#endif
+ 
+ static bool rtldsa_phys_load_deferred(void)
+ {
++#ifdef CONFIG_NET_DSA_RTL83XX_EXTERNAL_SPI
++	/* External-SPI: the user-port PHYs hang off an MDIO bus this very
++	 * driver creates, so they cannot exist before we probe - waiting for
++	 * them here deadlocks.  phylink defers per-port instead.
++	 */
++	return false;
++#else
+ 	struct device_node *phy_node;
+ 	struct phy_device *phydev;
+ 	struct device_node *dn;
+@@ -135,10 +144,18 @@
+ 	}
+ 
+ 	return false;
++#endif
+ }
+ 
+ static int rtldsa_mdio_loaded(void)
+ {
++#ifdef CONFIG_NET_DSA_RTL83XX_EXTERNAL_SPI
++	/* External-SPI: there is no realtek,otto-mdio node - the MDIO and
++	 * SerDes buses are children of the SPI switch syscon instead, and are
++	 * already probed by the time we get here.
++	 */
++	return 0;
++#else
+ 	struct device_node *dn;
+ 
+ 	/* Check if all buses of the Realtek MDIO controller are registered. */
+@@ -160,6 +177,7 @@
+ 	of_node_put(dn);
+ 
+ 	return 0;
++#endif
+ }
+ 
+ static int rtldsa_ports_probe(struct rtl838x_switch_priv *priv)
+@@ -873,6 +891,14 @@
+  */
+ static int rtldsa_ethernet_loaded(struct platform_device *pdev)
+ {
++#ifdef CONFIG_NET_DSA_RTL83XX_EXTERNAL_SPI
++	/* External-SPI: our conduit is another switch's DSA user port, not a
++	 * platform ethernet device, so this SoC-shaped check can never pass.
++	 * dsa_register_switch() resolves the conduit properly and defers on
++	 * its own if it is not up yet.
++	 */
++	return 0;
++#else
+ 	struct platform_device *eth_pdev;
+ 	struct device_node *port_np;
+ 	struct device_node *eth_np;
+@@ -896,6 +922,7 @@
+ 	}
+ 
+ 	return ret;
++#endif
+ }
+ 
+ static int rtl83xx_sw_probe(struct platform_device *pdev)

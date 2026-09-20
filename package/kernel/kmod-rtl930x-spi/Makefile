@@ -51,6 +51,7 @@ define Build/Prepare
 	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/12-dsa-93xx-hsgmii-caps.patch
 	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/13-vlan-unaware-bridge-vid.patch
 	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/14-eee-working.patch
+	patch -p1 -d $(PKG_BUILD_DIR) -i $(CURDIR)/patches/16-external-spi-skip-soc-dependency-checks.patch
 endef
 
 define KernelPackage/rtl930x-regmap
