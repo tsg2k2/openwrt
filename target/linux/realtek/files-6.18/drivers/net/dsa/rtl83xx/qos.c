@@ -416,6 +416,16 @@ static void rtldsa_930x_qos_set_scheduling_queue_weights(struct rtl838x_switch_p
 			sw_w32(rtldsa_default_queue_weights[q], addr);
 		}
 	}
+
+	/* The CPU port schedules through these queues whenever the silicon
+	 * CPU-port designation (which bypasses the scheduler) is off, e.g.
+	 * under the 802.1Q tagger; leaving them at silicon defaults caps
+	 * the to-CPU aggregate at about a gigabit.
+	 */
+	for (int q = 0; q < 12; q++) {
+		addr = RTL930X_SCHED_PORT_Q_CTRL_SET1(priv->r->cpu_port, q);
+		sw_w32(rtldsa_default_queue_weights[q < 8 ? q : 7], addr);
+	}
 }
 
 void rtldsa_930x_qos_init(struct rtl838x_switch_priv *priv)

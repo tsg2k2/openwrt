@@ -562,7 +562,7 @@ static int rtl838x_write_pie_action(u32 r[],  struct pie_rule *pr)
 
 	aif--;
 
-	pr_debug("%s, at %08x\n", __func__, (u32)aif);
+	pr_debug("%s, at %p\n", __func__, aif);
 	/* Multiple actions can be linked to a match of a PIE rule,
 	 * they have different precedence depending on their type and this precedence
 	 * defines which Action Information Field (0-4) in the IACL table stores
@@ -678,7 +678,7 @@ static void rtl838x_read_pie_action(u32 r[],  struct pie_rule *pr)
 
 	aif--;
 
-	pr_debug("%s, at %08x\n", __func__, (u32)aif);
+	pr_debug("%s, at %p\n", __func__, aif);
 	if (pr->drop)
 		pr_debug("%s: Action Drop: %d", __func__, pr->drop);
 

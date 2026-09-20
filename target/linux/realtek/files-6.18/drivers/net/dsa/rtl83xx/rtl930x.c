@@ -774,7 +774,7 @@ static void rtl930x_led_init(struct rtl838x_switch_priv *priv)
 
 		if (leds_in_this_set <= 0 || leds_in_this_set > ARRAY_SIZE(set_config)) {
 			if (leds_in_this_set != -EINVAL) {
-				dev_err(dev, "%s invalid, skipping this set, leds_in_this_set=%d, should be (0, %d]\n",
+				dev_err(dev, "%s invalid, skipping this set, leds_in_this_set=%d, should be (0, %zu]\n",
 					set_name, leds_in_this_set, ARRAY_SIZE(set_config));
 			}
 

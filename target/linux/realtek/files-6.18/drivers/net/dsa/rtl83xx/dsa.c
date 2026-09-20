@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <net/dsa.h>
+#include <linux/dsa/8021q.h>
 #include <linux/etherdevice.h>
 #include <linux/if_bridge.h>
 #include <linux/if_vlan.h>
@@ -16,6 +17,10 @@
 #define RTLDSA_FRAME_OVERHEAD		(ETH_HLEN + 2 * VLAN_HLEN + ETH_FCS_LEN)
 /* Tail tag the DSA core adds to a frame on its way to the conduit */
 #define RTLDSA_TAG_OVERHEAD		4
+
+/* 93xx registers used by the tag_8021q support below */
+#define RTL930X_L2_CPU_PORT_CTRL		(0xc70c)
+#define RTL930X_VLAN_PORT_TAG_CTRL(port)	(0xce24 + ((port) << 2))
 
 static const u8 ipv4_ll_mcast_addr_base[ETH_ALEN] = {
 	0x01, 0x00, 0x5e, 0x00, 0x00, 0x00
@@ -42,10 +47,13 @@ static enum dsa_tag_protocol rtldsa_get_tag_protocol(struct dsa_switch *ds,
 						     int port,
 						     enum dsa_tag_protocol mprot)
 {
-	/* The switch does not tag the frames, instead internally the header
-	 * structure for each packet is tagged accordingly.
+	struct rtl838x_switch_priv *priv = ds->priv;
+
+	/* The default OTTO protocol uses the inline silicon CPU tag; the
+	 * external-CPU 93xx topologies can switch to 802.1Q-based tagging
+	 * at runtime (see rtldsa_93xx_change_tag_protocol).
 	 */
-	return DSA_TAG_PROTO_RTL_OTTO;
+	return priv->tag_proto ?: DSA_TAG_PROTO_RTL_OTTO;
 }
 
 static void rtldsa_83xx_mc_pmasks_setup(struct rtl838x_switch_priv *priv)
@@ -148,6 +156,11 @@ static int rtldsa_93xx_setup(struct dsa_switch *ds)
 	int err;
 
 	pr_info("%s called\n", __func__);
+
+	/* Nonzero bridge numbers are a tag_8021q prerequisite: bridge VID 0
+	 * is reserved and would collide with the first standalone VID.
+	 */
+	ds->max_num_bridges = DSA_TAG_8021Q_MAX_NUM_BRIDGES;
 
 	/* Disable all ports except CPU port */
 	for (int i = 0; i < ds->num_ports; i++)
@@ -463,11 +476,16 @@ static int rtldsa_port_enable(struct dsa_switch *ds, int port, struct phy_device
 {
 	struct rtl838x_switch_priv *priv = ds->priv;
 
-	pr_debug("%s: %x %d", __func__, (u32)priv, port);
+	pr_debug("%s: %p %d", __func__, priv, port);
 	priv->ports[port].enable = true;
 
-	/* enable inner tagging on egress, do not keep any tags */
-	priv->r->vlan_port_keep_tag_set(port, 0, 1);
+	/* enable inner tagging on egress, do not keep any tags; under the
+	 * 802.1Q tagger the tag status must stay VLAN-table-driven instead
+	 */
+	if (priv->tag_proto == DSA_TAG_PROTO_RTL_OTTO_8021Q)
+		sw_w32(0, RTL930X_VLAN_PORT_TAG_CTRL(port));
+	else
+		priv->r->vlan_port_keep_tag_set(port, 0, 1);
 
 	if (dsa_is_cpu_port(ds, port))
 		return 0;
@@ -491,7 +509,7 @@ static void rtldsa_port_disable(struct dsa_switch *ds, int port)
 {
 	struct rtl838x_switch_priv *priv = ds->priv;
 
-	pr_debug("%s %x: %d", __func__, (u32)priv, port);
+	pr_debug("%s %p: %d", __func__, priv, port);
 	/* you can only disable user ports */
 	if (!dsa_is_user_port(ds, port))
 		return;
@@ -868,13 +886,175 @@ static void rtldsa_update_port_member(struct rtl838x_switch_priv *priv, int port
 		priv->r->traffic_set(port, port_mask);
 }
 
+/* 802.1Q-based CPU tagging (tag_8021q) for external-CPU 93xx topologies.
+ *
+ * Each user port's standalone VID has the port (untagged, and as forced
+ * PVID for ALL ingress traffic, tagged or not) and the CPU port (tagged)
+ * as members: CPU-bound frames carry their source port's VID and directed
+ * TX is confined by VLAN membership. Bridge VIDs span the bridged ports.
+ * The silicon CPU-port designation (inline 0x8899 tag insertion) is
+ * disabled while this mode is active.
+ */
+/* Egress tag status of every port is forced by rtldsa_port_enable()
+ * (outer UNTAG, inner TAGGED), which suits the inline-CPU-tag model but
+ * overrides the VLAN table. tag_8021q needs table-driven tagging (the
+ * INTERNAL tag status, value 0): the CPU port emits each frame tagged
+ * with its source port's VID and user ports stay untagged via the
+ * per-VLAN untag sets.
+ */
+static void rtldsa_93xx_set_tag_sts(struct dsa_switch *ds, bool internal)
+{
+	struct rtl838x_switch_priv *priv = ds->priv;
+	struct dsa_port *dp;
+
+	dsa_switch_for_each_available_port(dp, ds) {
+		if (internal)
+			sw_w32(0, RTL930X_VLAN_PORT_TAG_CTRL(dp->index));
+		else
+			priv->r->vlan_port_keep_tag_set(dp->index, 0, 1);
+	}
+
+	if (internal)
+		sw_w32(0, RTL930X_VLAN_PORT_TAG_CTRL(priv->r->cpu_port));
+	else
+		priv->r->vlan_port_keep_tag_set(priv->r->cpu_port, 0, 1);
+}
+
+static int rtldsa_tag_8021q_vlan_add(struct dsa_switch *ds, int port, u16 vid,
+				     u16 flags)
+{
+	struct rtl838x_switch_priv *priv = ds->priv;
+	struct rtldsa_vlan_info info;
+
+	if (vid >= MAX_VLANS)
+		return -EINVAL;
+
+	mutex_lock(&priv->reg_mutex);
+
+	priv->r->vlan_tables_read(vid, &info);
+
+	if (!info.member_ports) {
+		info.fid = 0;
+		info.hash_mc_fid = false;
+		info.hash_uc_fid = false;
+		info.profile_id = 0;
+	}
+
+	if (info.untagged_ports & ~info.member_ports)
+		info.untagged_ports = 0;
+
+	info.member_ports |= BIT_ULL(port);
+	if (flags & BRIDGE_VLAN_INFO_UNTAGGED)
+		info.untagged_ports |= BIT_ULL(port);
+	else
+		info.untagged_ports &= ~BIT_ULL(port);
+
+	priv->r->vlan_set_untagged(vid, info.untagged_ports);
+	priv->r->vlan_set_tagged(vid, &info);
+
+	/* Classify ALL ingress traffic (including already-tagged frames)
+	 * to the tagging PVID so the CPU-bound copy always carries the
+	 * source port's VID as its outer tag; a user tag is preserved as
+	 * payload underneath, like a VLAN-unaware switch.
+	 */
+	if ((flags & BRIDGE_VLAN_INFO_PVID) && port != priv->r->cpu_port) {
+		priv->r->vlan_port_pvid_set(port, PBVLAN_TYPE_INNER, vid);
+		priv->r->vlan_port_pvid_set(port, PBVLAN_TYPE_OUTER, vid);
+		priv->r->vlan_port_pvidmode_set(port, PBVLAN_TYPE_INNER,
+						PBVLAN_MODE_ALL_PKT);
+		priv->r->vlan_port_pvidmode_set(port, PBVLAN_TYPE_OUTER,
+						PBVLAN_MODE_ALL_PKT);
+		priv->ports[port].pvid = vid;
+	}
+
+	mutex_unlock(&priv->reg_mutex);
+
+	return 0;
+}
+
+static int rtldsa_tag_8021q_vlan_del(struct dsa_switch *ds, int port, u16 vid)
+{
+	struct rtl838x_switch_priv *priv = ds->priv;
+	struct rtldsa_vlan_info info;
+
+	if (vid >= MAX_VLANS)
+		return -EINVAL;
+
+	mutex_lock(&priv->reg_mutex);
+
+	priv->r->vlan_tables_read(vid, &info);
+
+	info.member_ports &= ~BIT_ULL(port);
+	info.untagged_ports &= ~BIT_ULL(port);
+
+	priv->r->vlan_set_untagged(vid, info.untagged_ports);
+	priv->r->vlan_set_tagged(vid, &info);
+
+	/* Deleting the port's tagging PVID (protocol switch back to the
+	 * inline CPU tag): restore the OTTO-era ingress classification.
+	 */
+	if (priv->ports[port].pvid == vid && port != priv->r->cpu_port) {
+		priv->r->vlan_port_pvid_set(port, PBVLAN_TYPE_INNER, 0);
+		priv->r->vlan_port_pvid_set(port, PBVLAN_TYPE_OUTER, 0);
+		priv->r->vlan_port_pvidmode_set(port, PBVLAN_TYPE_INNER,
+						PBVLAN_MODE_UNTAG_AND_PRITAG);
+		priv->r->vlan_port_pvidmode_set(port, PBVLAN_TYPE_OUTER,
+						PBVLAN_MODE_UNTAG_AND_PRITAG);
+		priv->ports[port].pvid = 0;
+	}
+
+	mutex_unlock(&priv->reg_mutex);
+
+	return 0;
+}
+
+static int rtldsa_93xx_change_tag_protocol(struct dsa_switch *ds,
+					   enum dsa_tag_protocol proto)
+{
+	struct rtl838x_switch_priv *priv = ds->priv;
+	int err;
+
+	if (proto == (priv->tag_proto ?: DSA_TAG_PROTO_RTL_OTTO))
+		return 0;
+
+	switch (proto) {
+	case DSA_TAG_PROTO_RTL_OTTO:
+		/* Re-enable the inline CPU tag first so OTTO directed TX
+		 * works as soon as DSA swaps the tagger; the tag_8021q
+		 * VLANs and forced PVIDs are unwound by the vlan_del
+		 * callbacks. The rtl930x-spi conduit watchdog keys off
+		 * the active tagger and resumes re-asserting this bit.
+		 */
+		sw_w32_mask(0, BIT(0), RTL930X_L2_CPU_PORT_CTRL);
+		dsa_tag_8021q_unregister(ds);
+		rtldsa_93xx_set_tag_sts(ds, false);
+		break;
+	case DSA_TAG_PROTO_RTL_OTTO_8021Q:
+		err = dsa_tag_8021q_register(ds, htons(ETH_P_8021Q));
+		if (err)
+			return err;
+		/* Stop inserting the inline CPU tag; CPU-bound frames now
+		 * carry the tag_8021q VID of their source port instead.
+		 */
+		rtldsa_93xx_set_tag_sts(ds, true);
+		sw_w32_mask(BIT(0), 0, RTL930X_L2_CPU_PORT_CTRL);
+		break;
+	default:
+		return -EPROTONOSUPPORT;
+	}
+
+	priv->tag_proto = proto;
+
+	return 0;
+}
+
 static int rtldsa_port_bridge_join(struct dsa_switch *ds, int port, struct dsa_bridge bridge,
 				   bool *tx_fwd_offload, struct netlink_ext_ack *extack)
 {
 	struct rtl838x_switch_priv *priv = ds->priv;
 	unsigned int i;
 
-	pr_debug("%s %x: %d", __func__, (u32)priv, port);
+	pr_debug("%s %p: %d", __func__, priv, port);
 
 	/* reset to default flags for new net_bridge_port */
 	priv->ports[port].isolated = false;
@@ -893,6 +1073,10 @@ static int rtldsa_port_bridge_join(struct dsa_switch *ds, int port, struct dsa_b
 
 	mutex_unlock(&priv->reg_mutex);
 
+	if (priv->tag_proto == DSA_TAG_PROTO_RTL_OTTO_8021Q)
+		return dsa_tag_8021q_bridge_join(ds, port, bridge,
+						 tx_fwd_offload, extack);
+
 	return 0;
 }
 
@@ -901,7 +1085,7 @@ static void rtldsa_port_bridge_leave(struct dsa_switch *ds, int port, struct dsa
 	struct rtl838x_switch_priv *priv = ds->priv;
 	unsigned int i;
 
-	pr_debug("%s %x: %d", __func__, (u32)priv, port);
+	pr_debug("%s %p: %d", __func__, priv, port);
 
 	mutex_lock(&priv->reg_mutex);
 
@@ -915,6 +1099,9 @@ static void rtldsa_port_bridge_leave(struct dsa_switch *ds, int port, struct dsa
 		rtldsa_port_xstp_state_set(priv, port, BR_STATE_FORWARDING, i);
 
 	mutex_unlock(&priv->reg_mutex);
+
+	if (priv->tag_proto == DSA_TAG_PROTO_RTL_OTTO_8021Q)
+		dsa_tag_8021q_bridge_leave(ds, port, bridge);
 }
 
 static void rtldsa_port_xstp_state_set(struct rtl838x_switch_priv *priv, int port,
@@ -1043,7 +1230,12 @@ static void rtldsa_setup_l2_mc_entry(struct rtl838x_l2_entry *e, int vid, u64 ma
 
 static int rtldsa_l2_hash_index(u32 key, int slot)
 {
-	return slot > 3 ? ((key >> 14) & 0xffff) | (slot & 3) : ((key << 2) | slot) & 0xffff;
+	/* Slots 4-7 are slots 0-3 of the block-1 hash, which lives in the high
+	 * half of the key.  The slot has to REPLACE the low two bits, so clear
+	 * them first: OR-ing into (key >> 14) leaves a stale bit set whenever
+	 * the key already had one there, which aliases onto another entry.
+	 */
+	return slot > 3 ? (((key >> 16) << 2) | (slot & 3)) : ((key << 2) | slot) & 0xffff;
 }
 
 /* Uses the seed to identify a hash bucket in the L2 using the derived hash key and then loops
@@ -1331,7 +1523,7 @@ static bool rtldsa_mac_is_unsnoop(const unsigned char *addr)
 	return false;
 }
 
-static int rtldsa_83xx_port_mdb_add(struct dsa_switch *ds, int port,
+static int rtldsa_port_mdb_add(struct dsa_switch *ds, int port,
 				    const struct switchdev_obj_port_mdb *mdb,
 				    const struct dsa_db db)
 {
@@ -1410,13 +1602,6 @@ out:
 
 	return err;
 }
-static int rtldsa_93xx_port_mdb_add(struct dsa_switch *ds, int port,
-				    const struct switchdev_obj_port_mdb *mdb,
-				    const struct dsa_db db)
-{
-	return -EOPNOTSUPP;
-}
-
 static int rtldsa_port_mdb_del(struct dsa_switch *ds, int port,
 			       const struct switchdev_obj_port_mdb *mdb,
 			       const struct dsa_db db)
@@ -1880,7 +2065,7 @@ const struct dsa_switch_ops rtldsa_83xx_switch_ops = {
 	.port_fdb_del		= rtldsa_port_fdb_del,
 	.port_fdb_dump		= rtldsa_port_fdb_dump,
 
-	.port_mdb_add		= rtldsa_83xx_port_mdb_add,
+	.port_mdb_add		= rtldsa_port_mdb_add,
 	.port_mdb_del		= rtldsa_port_mdb_del,
 
 	.port_mirror_add	= rtldsa_port_mirror_add,
@@ -1902,6 +2087,9 @@ const struct phylink_mac_ops rtldsa_93xx_phylink_mac_ops = {
 
 const struct dsa_switch_ops rtldsa_93xx_switch_ops = {
 	.get_tag_protocol	= rtldsa_get_tag_protocol,
+	.change_tag_protocol	= rtldsa_93xx_change_tag_protocol,
+	.tag_8021q_vlan_add	= rtldsa_tag_8021q_vlan_add,
+	.tag_8021q_vlan_del	= rtldsa_tag_8021q_vlan_del,
 	.setup			= rtldsa_93xx_setup,
 
 	.phylink_get_caps	= rtldsa_phylink_get_caps,
@@ -1942,7 +2130,7 @@ const struct dsa_switch_ops rtldsa_93xx_switch_ops = {
 	.port_fdb_del		= rtldsa_port_fdb_del,
 	.port_fdb_dump		= rtldsa_port_fdb_dump,
 
-	.port_mdb_add		= rtldsa_93xx_port_mdb_add,
+	.port_mdb_add		= rtldsa_port_mdb_add,
 	.port_mdb_del		= rtldsa_port_mdb_del,
 
 	.port_mirror_add	= rtldsa_port_mirror_add,

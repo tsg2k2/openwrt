@@ -1280,6 +1280,7 @@ struct rtl838x_switch_priv {
 	struct dsa_switch *ds;
 	struct device *dev;
 	u16 family_id;
+	enum dsa_tag_protocol tag_proto;
 	struct rtldsa_port ports[57];
 	struct mutex reg_mutex;		/* Mutex for individual register manipulations */
 	struct mutex pie_mutex;		/* Mutex for Packet Inspection Engine */

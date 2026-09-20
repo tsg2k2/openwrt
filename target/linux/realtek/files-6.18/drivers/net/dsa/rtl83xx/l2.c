@@ -861,6 +861,7 @@ static void rtl930x_fill_l2_row(u32 r[], struct rtl838x_l2_entry *e)
 		else
 			r[2] |= e->vid & 0xfff;
 	} else { /* L2_MULTICAST */
+		r[1] |= e->rvid & 0xfff;
 		r[2] |= (e->mc_portmask_index & 0x3ff) << 16;
 		r[2] |= e->mc_mac_index & 0x7ff;
 	}

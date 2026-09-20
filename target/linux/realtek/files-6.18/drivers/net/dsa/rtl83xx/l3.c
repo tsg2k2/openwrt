@@ -96,7 +96,7 @@ static void otto_l3_839x_setup_port_macs(struct otto_l3_ctrl *ctrl)
 	u64 mac;
 
 	/* Configure the switch's own MAC addresses used when routing packets */
-	dev_dbg(ctrl->dev, "got port %08x\n", (u32)priv->ports[priv->r->cpu_port].dp);
+	dev_dbg(ctrl->dev, "got port %p\n", priv->ports[priv->r->cpu_port].dp);
 	dev = priv->ports[priv->r->cpu_port].dp->user;
 	mac = ether_addr_to_u64(dev->dev_addr);
 
