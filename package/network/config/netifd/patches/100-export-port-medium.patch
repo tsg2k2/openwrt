@@ -1,0 +1,29 @@
+--- a/system-linux.c
++++ b/system-linux.c
+@@ -3428,6 +3428,7 @@
+ 	__s8 nwords;
+ 	void *c, *d;
+ 	char *s;
++	const char *medium;
+ 
+ 	system_get_ethtool_pause(dev, &rx_pause, &tx_pause, &pause_autoneg);
+ 
+@@ -3472,6 +3473,18 @@
+ 			ecmd.req.duplex == DUPLEX_HALF ? 'H' : 'F');
+ 		blobmsg_add_string_buffer(b);
+ 	}
++
++	switch (ecmd.req.port) {
++	case PORT_TP:    medium = "tp"; break;
++	case PORT_AUI:   medium = "aui"; break;
++	case PORT_MII:   medium = "mii"; break;
++	case PORT_FIBRE: medium = "fibre"; break;
++	case PORT_BNC:   medium = "bnc"; break;
++	case PORT_DA:    medium = "da"; break;
++	case PORT_NONE:  medium = "none"; break;
++	default:         medium = "other"; break;
++	}
++	blobmsg_add_string(b, "port", medium);
+ 	blobmsg_add_u8(b, "autoneg", !!ecmd.req.autoneg);
+ 
+ 	c = blobmsg_open_table(b, "flow-control");

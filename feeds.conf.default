@@ -3,6 +3,9 @@ src-git luci https://git.openwrt.org/project/luci.git
 src-git routing https://git.openwrt.org/feed/routing.git
 src-git telephony https://git.openwrt.org/feed/telephony.git
 src-git video https://github.com/openwrt/video.git
+# Verizon CR1000A: MXL3711 MoCA 2.5G PHY driver + firmware, and its LuCI status app.
+src-git mxl https://github.com/tsg2k2/kmod-phy-mxl371x.git
+src-git luci_moca https://github.com/tsg2k2/luci-app-moca.git
 #src-git targets https://github.com/openwrt/targets.git
 #src-git oldpackages http://git.openwrt.org/packages.git
 #src-link custom /usr/src/openwrt/custom-feed
