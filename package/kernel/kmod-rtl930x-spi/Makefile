@@ -14,7 +14,7 @@ RTPCS_SRC:=$(TOPDIR)/target/linux/realtek/files-6.18/drivers/net/pcs
 RTSDS_SRC:=$(TOPDIR)/target/linux/realtek/files-6.18/drivers/net/mdio
 
 # Re-prepare whenever the copied-in realtek target sources or our patches change
-PKG_FILE_DEPENDS:=$(RTL83XX_SRC)/ $(RTINC_SRC)/ $(RTSOC_SRC)/otto_table.c $(RTPCS_SRC)/pcs-rtl-otto.c $(RTSDS_SRC)/mdio-realtek-otto-serdes.c ./patches/
+PKG_FILE_DEPENDS:=$(RTL83XX_SRC)/ $(RTINC_SRC)/ $(RTSOC_SRC)/otto_table.c $(RTPCS_SRC)/pcs-rtl-otto.c $(RTSDS_SRC)/mdio-realtek-otto-serdes.c $(RTSDS_SRC)/mdio-realtek-otto.c ./patches/
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -32,6 +32,9 @@ define Build/Prepare
 	# Copy the upstream PCS + SerDes MDIO bus and adapt them for SPI-slave
 	# embedding on the 6.12 kernel
 	$(CP) $(RTSDS_SRC)/mdio-realtek-otto-serdes.c $(PKG_BUILD_DIR)/
+	# the switch's own port MDIO bus (realtek,otto-mdio); upstream split it
+	# out of the switch driver into its own module
+	$(CP) $(RTSDS_SRC)/mdio-realtek-otto.c $(PKG_BUILD_DIR)/
 	$(CP) $(RTPCS_SRC)/pcs-rtl-otto.c $(PKG_BUILD_DIR)/
 	patch -p1 -d $(PKG_BUILD_DIR) -i $(CURDIR)/patches/00-mdio-otto-serdes-embed.patch
 	patch -p1 -d $(PKG_BUILD_DIR) -i $(CURDIR)/patches/01-pcs-rtl-otto-spi-adapter.patch
@@ -52,6 +55,7 @@ define Build/Prepare
 	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/13-vlan-unaware-bridge-vid.patch
 	patch -p1 -d $(PKG_BUILD_DIR)/dsa -i $(CURDIR)/patches/14-eee-working.patch
 	patch -p1 -d $(PKG_BUILD_DIR) -i $(CURDIR)/patches/16-external-spi-skip-soc-dependency-checks.patch
+	patch -p1 -d $(PKG_BUILD_DIR) -i $(CURDIR)/patches/17-otto-mdio-foreign-bus-phy.patch
 endef
 
 define KernelPackage/rtl930x-regmap
@@ -96,12 +100,26 @@ define KernelPackage/rtl930x-otto-table/description
   now calls into.  Built as its own module because it carries a module_init.
 endef
 
+define KernelPackage/rtl930x-otto-mdio
+  SUBMENU:=Network Devices
+  TITLE:=Realtek Otto switch-port MDIO bus (external SPI mode)
+  FILES:=$(PKG_BUILD_DIR)/rtl930x-otto-mdio.ko
+  AUTOLOAD:=$(call AutoProbe,rtl930x-otto-mdio,1)
+  DEPENDS:=@TARGET_qualcommax_ipq807x +kmod-rtl930x-spi +kmod-libphy
+endef
+
+define KernelPackage/rtl930x-otto-mdio/description
+  The MDIO controller inside the RTL93xx that carries the user-port PHYs.
+  Upstream split it out of the switch driver; without it the switch cannot
+  connect to its port PHYs ("failed to connect to PHY: -ENODEV").
+endef
+
 define KernelPackage/rtl930x-dsa
   SUBMENU:=Network Devices
   TITLE:=RTL930x DSA switch driver (external SPI mode)
   FILES:=$(PKG_BUILD_DIR)/rtl930x-dsa.ko
   AUTOLOAD:=$(call AutoProbe,rtl930x-dsa,1)
-  DEPENDS:=@TARGET_qualcommax_ipq807x +kmod-rtl930x-spi +kmod-rtl930x-otto-table \
+  DEPENDS:=@TARGET_qualcommax_ipq807x +kmod-rtl930x-spi +kmod-rtl930x-otto-table +kmod-rtl930x-otto-mdio \
            +kmod-dsa +kmod-libphy +kmod-phy-realtek
 endef
 
@@ -119,4 +137,5 @@ endef
 $(eval $(call KernelPackage,rtl930x-regmap))
 $(eval $(call KernelPackage,rtl930x-spi))
 $(eval $(call KernelPackage,rtl930x-otto-table))
+$(eval $(call KernelPackage,rtl930x-otto-mdio))
 $(eval $(call KernelPackage,rtl930x-dsa))

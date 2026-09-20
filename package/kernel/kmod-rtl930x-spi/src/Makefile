@@ -10,11 +10,12 @@ ccflags-y += -I$(src) -I$(src)/include -DCONFIG_NET_DSA_RTL83XX_EXTERNAL_SPI
 # from userspace while this driver owns it.  Off by default; uncomment to enable.
 #ccflags-y += -DRTL930X_SPI_SPIDEV
 
-obj-m := rtl930x-regmap.o rtl930x-spi.o rtl930x-otto-table.o rtl930x-dsa.o
+obj-m := rtl930x-regmap.o rtl930x-spi.o rtl930x-otto-table.o rtl930x-otto-mdio.o rtl930x-dsa.o
 
 rtl930x-regmap-objs := rtl930x_regmap.o
 rtl930x-spi-objs    := rtl930x_spi.o pcs-rtl-otto.o mdio-realtek-otto-serdes.o
 rtl930x-otto-table-objs := otto_table.o
+rtl930x-otto-mdio-objs  := mdio-realtek-otto.o
 
 rtl930x-dsa-objs    := dsa/common.o   \
                         dsa/dsa.o      \

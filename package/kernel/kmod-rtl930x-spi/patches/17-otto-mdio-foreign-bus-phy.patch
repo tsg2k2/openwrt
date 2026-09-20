@@ -1,0 +1,35 @@
+mdio-rtl-otto: tolerate a switch port whose PHY is on a foreign MDIO bus
+
+The driver assumes every switch-port phy-handle resolves to a PHY on one of
+its own buses, and fails the whole probe otherwise.  On the CR1000A the MoCA
+port's MXL3711 hangs off the SoC's MDIO controller instead, whose "reg" is a
+register address rather than a bus index, so probe died with
+"mdio@90000 illegal bus number" and none of the switch's real port PHYs -
+lan1, lan2, lan10g - ever came up.
+
+Skip such a port instead: it is not this controller's to drive, and phylink
+connects it through the foreign bus on its own.
+
+--- a/mdio-realtek-otto.c
++++ b/mdio-realtek-otto.c
+@@ -1034,8 +1034,18 @@
+ 			return dev_err_probe(dev, -EINVAL, "%pfwP no bus number\n",
+ 					     fw_bus ?: fw_phy);
+ 
+-		if (smi_bus >= ctrl->cfg->num_buses)
+-			return dev_err_probe(dev, -EINVAL, "%pfwP illegal bus number\n", fw_bus);
++		/* A switch port's PHY does not have to sit on THIS controller's
++		 * buses: the CR1000A reaches its MoCA PHY over the SoC's own
++		 * MDIO bus.  Such a port is not ours to drive - leave it to
++		 * phylink and carry on instead of failing the whole probe with
++		 * "illegal bus number" (the foreign controller's reg is an
++		 * address, not a bus index).
++		 */
++		if (smi_bus >= ctrl->cfg->num_buses) {
++			dev_dbg(dev, "%pfwP: PHY on a foreign MDIO bus, skipping\n",
++				fw_port);
++			continue;
++		}
+ 
+ 		if (fwnode_device_is_compatible(fw_phy, "ethernet-phy-ieee802.3-c45"))
+ 			ctrl->bus[smi_bus].is_c45 = true;
