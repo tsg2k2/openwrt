@@ -45,6 +45,8 @@ struct ppe_flow_data {
 	 * the rule ingresses from one; zero when it does not.
 	 */
 	u16 casc_ivid;
+	u8 casc_mac[ETH_ALEN];
+	u32 casc_mtu;
 	u16 pppoe_sid;
 	bool pppoe_valid;
 
@@ -369,7 +371,8 @@ static int ppe_flow_mangle_ipv4(const struct flow_action_entry *act,
  * Called under rcu_read_lock() for dev_get_by_index_rcu()'s sake.
  */
 static int ppe_flow_port_by_cascade(struct qca_ppe_priv *priv,
-				    struct net_device *dev, u16 *casc_vid)
+				    struct net_device *dev, u16 *casc_vid,
+				    u8 *casc_mac, u32 *casc_mtu)
 {
 	int hops;
 
@@ -385,6 +388,20 @@ static int ppe_flow_port_by_cascade(struct qca_ppe_priv *priv,
 
 		if (below->ds == &priv->ds)
 			return below->index;
+
+		/* The address a cascaded client sends to is the address of
+		 * whatever routes for it, which is the bridge the cascaded
+		 * port is in - NOT the conduit port of ours the frame arrives
+		 * on, whose MAC is its own. The L3 stage only accepts a frame
+		 * whose destination matches a MY_MAC entry, so taking the
+		 * wrong one here means nothing is ever routed and every packet
+		 * falls back to the CPU. Copy it out rather than keeping the
+		 * pointer: this walk runs under rcu, the use does not.
+		 */
+		if (casc_mac && below->bridge && below->bridge->dev) {
+			ether_addr_copy(casc_mac, below->bridge->dev->dev_addr);
+			*casc_mtu = below->bridge->dev->mtu;
+		}
 
 		/* The tag the cascaded switch puts on a frame crossing to us.
 		 * Our own ingress has to classify it before the L3 stage will
@@ -406,7 +423,8 @@ static int ppe_flow_port_by_cascade(struct qca_ppe_priv *priv,
 }
 
 static int ppe_flow_port_by_ifindex_vid(struct qca_ppe_priv *priv, int ifindex,
-					u16 *casc_vid)
+					u16 *casc_vid, u8 *casc_mac,
+					u32 *casc_mtu)
 {
 	struct net_device *dev;
 	struct net *net = NULL;
@@ -430,7 +448,8 @@ static int ppe_flow_port_by_ifindex_vid(struct qca_ppe_priv *priv, int ifindex,
 
 	rcu_read_lock();
 	dev = dev_get_by_index_rcu(net, ifindex);
-	port = dev ? ppe_flow_port_by_cascade(priv, dev, casc_vid) : -EOPNOTSUPP;
+	port = dev ? ppe_flow_port_by_cascade(priv, dev, casc_vid, casc_mac,
+					      casc_mtu) : -EOPNOTSUPP;
 	rcu_read_unlock();
 
 	return port;
@@ -438,7 +457,7 @@ static int ppe_flow_port_by_ifindex_vid(struct qca_ppe_priv *priv, int ifindex,
 
 static int ppe_flow_port_by_ifindex(struct qca_ppe_priv *priv, int ifindex)
 {
-	return ppe_flow_port_by_ifindex_vid(priv, ifindex, NULL);
+	return ppe_flow_port_by_ifindex_vid(priv, ifindex, NULL, NULL, NULL);
 }
 
 /* Make a tagged PPPoE WAN port route its ingress traffic in hardware, so the
@@ -818,7 +837,7 @@ static int ppe_flow_ingress_vsi(struct qca_ppe_priv *priv, int iport, u16 vid)
  * index keeps the two in step without a second allocator.
  */
 static int ppe_flow_alloc_ingress(struct qca_ppe_priv *priv, int iport,
-				  u16 vid, u16 casc_vid,
+				  u16 vid, const struct ppe_flow_data *data,
 				  struct ppe_flow_entry *entry)
 {
 	struct dsa_port *dp = dsa_to_port(&priv->ds, iport);
@@ -834,14 +853,10 @@ static int ppe_flow_alloc_ingress(struct qca_ppe_priv *priv, int iport,
 	 * VSI the rule belongs to: without that the L3 stage never parses
 	 * through to the tuple and the entry, though installed, never matches.
 	 */
-	if (casc_vid && !priv->wan_ref[iport]) {
-		struct net_device *brdev = priv->port_br_dev[iport];
-
-		if (!brdev)
-			brdev = dsa_to_port(&priv->ds, iport)->user;
-
-		ret = ppe_casc_ingress_get(priv, iport, casc_vid,
-					   brdev->dev_addr, brdev->mtu);
+	if (data->casc_ivid && !priv->wan_ref[iport] &&
+	    !is_zero_ether_addr(data->casc_mac)) {
+		ret = ppe_casc_ingress_get(priv, iport, data->casc_ivid,
+					   data->casc_mac, data->casc_mtu);
 		if (ret)
 			return ret;
 		entry->casc_iport = iport;
@@ -1526,7 +1541,9 @@ static int ppe_flow_offload_replace(struct ppe_flow_block *fb,
 		 */
 		iport = ppe_flow_port_by_ifindex_vid(priv,
 						     match.key->ingress_ifindex,
-						     &data.casc_ivid);
+						     &data.casc_ivid,
+						     data.casc_mac,
+						     &data.casc_mtu);
 		if (iport < 0)
 			return ppe_flow_reject(priv, PPE_REJECT_INGRESS_PORT);
 	}
@@ -1709,8 +1726,7 @@ static int ppe_flow_offload_replace(struct ppe_flow_block *fb,
 	entry->casc_iport = -1;
 	entry->iport = iport;
 
-	ret = ppe_flow_alloc_ingress(priv, iport, data.ivid,
-				     data.casc_ivid, entry);
+	ret = ppe_flow_alloc_ingress(priv, iport, data.ivid, &data, entry);
 	if (ret) {
 		priv->flow_reject[ret == -EOPNOTSUPP ? PPE_REJECT_INGRESS_VLAN :
 				  PPE_REJECT_RESOURCE]++;
