@@ -18,6 +18,7 @@
 
 #include <linux/bitfield.h>
 #include <linux/if_pppox.h>
+#include <linux/dsa/8021q.h>
 #include <linux/if_vlan.h>
 #include <linux/netdevice.h>
 #include <linux/rhashtable.h>
@@ -40,6 +41,10 @@ struct ppe_flow_data {
 	u16 vlan_id;
 	bool vlan_valid;
 	u16 ivid;
+	/* The tag_8021q ctag a cascaded switch puts on frames it sends us, when
+	 * the rule ingresses from one; zero when it does not.
+	 */
+	u16 casc_ivid;
 	u16 pppoe_sid;
 	bool pppoe_valid;
 
@@ -72,6 +77,7 @@ struct ppe_flow_entry {
 	int pub_ip;
 	int wan_port;
 	int wan_iport;
+	int casc_iport;
 	u8 iport;
 	u8 oport;
 	u16 ivid;
@@ -363,7 +369,7 @@ static int ppe_flow_mangle_ipv4(const struct flow_action_entry *act,
  * Called under rcu_read_lock() for dev_get_by_index_rcu()'s sake.
  */
 static int ppe_flow_port_by_cascade(struct qca_ppe_priv *priv,
-				    struct net_device *dev)
+				    struct net_device *dev, u16 *casc_vid)
 {
 	int hops;
 
@@ -380,13 +386,27 @@ static int ppe_flow_port_by_cascade(struct qca_ppe_priv *priv,
 		if (below->ds == &priv->ds)
 			return below->index;
 
+		/* The tag the cascaded switch puts on a frame crossing to us.
+		 * Our own ingress has to classify it before the L3 stage will
+		 * parse through to the tuple the flow keys on. Only a bridged
+		 * port carries the bridge VID; a standalone one is left alone,
+		 * and its flows stay in software.
+		 */
+		if (casc_vid && !*casc_vid) {
+			unsigned int br = dsa_port_bridge_num_get(below);
+
+			if (br)
+				*casc_vid = dsa_tag_8021q_bridge_vid(br);
+		}
+
 		dev = dsa_port_to_conduit(below);
 	}
 
 	return -EOPNOTSUPP;
 }
 
-static int ppe_flow_port_by_ifindex(struct qca_ppe_priv *priv, int ifindex)
+static int ppe_flow_port_by_ifindex_vid(struct qca_ppe_priv *priv, int ifindex,
+					u16 *casc_vid)
 {
 	struct net_device *dev;
 	struct net *net = NULL;
@@ -410,10 +430,15 @@ static int ppe_flow_port_by_ifindex(struct qca_ppe_priv *priv, int ifindex)
 
 	rcu_read_lock();
 	dev = dev_get_by_index_rcu(net, ifindex);
-	port = dev ? ppe_flow_port_by_cascade(priv, dev) : -EOPNOTSUPP;
+	port = dev ? ppe_flow_port_by_cascade(priv, dev, casc_vid) : -EOPNOTSUPP;
 	rcu_read_unlock();
 
 	return port;
+}
+
+static int ppe_flow_port_by_ifindex(struct qca_ppe_priv *priv, int ifindex)
+{
+	return ppe_flow_port_by_ifindex_vid(priv, ifindex, NULL);
 }
 
 /* Make a tagged PPPoE WAN port route its ingress traffic in hardware, so the
@@ -604,6 +629,137 @@ static void ppe_wan_ingress_put(struct qca_ppe_priv *priv, int port)
 	priv->wan_vsi[port] = -1;
 }
 
+/* A port carrying a switch cascaded below this one sees that switch's tag_8021q
+ * ctag on every frame crossing to us. The L3 stage does not parse through a
+ * residual 802.1Q tag, so the inner tuple never reaches the flow lookup while
+ * the tag is still on: classify the ctag into a VSI of its own and strip it,
+ * and put it back on everything leaving toward the CPU, so a frame that misses
+ * the flow table still reaches the bridge in its on-wire form.
+ *
+ * This is the tagged-uplink treatment above without its PPPoE half. It is what
+ * lets the direction that ingresses from the cascade match in hardware; the
+ * other direction already does, because it ingresses on a port of ours.
+ */
+static int ppe_casc_ingress_get(struct qca_ppe_priv *priv, int port, u16 vid,
+				const u8 *mac, u32 mtu)
+{
+	u32 words[PPE_MY_MAC_WORDS] = {};
+	int vsi, xlt, ret;
+
+	if (priv->casc_ref[port]++)
+		return 0;
+
+	/* The translation rule shares one table with the bridge VLANs, so its
+	 * index comes from the allocator they share.
+	 */
+	xlt = ppe_xlt_idx_alloc(priv);
+	if (xlt < 0) {
+		priv->casc_ref[port]--;
+		return xlt;
+	}
+
+	vsi = ppe_vsi_alloc(priv);
+	if (vsi < 0) {
+		ret = vsi;
+		goto err_xlt;
+	}
+	priv->casc_vsi[port] = vsi;
+	priv->casc_vid[port] = vid;
+	priv->casc_xlt[port] = xlt;
+	ppe_vsi_member_set(priv, vsi, BIT(port) | BIT(QCA_PPE_CPU_PORT));
+
+	ppe_entry_set(words, PPE_MY_MAC_ADDR_OFF, PPE_MY_MAC_ADDR_LEN,
+		      ether_addr_to_u64(mac));
+	ppe_entry_set(words, PPE_MY_MAC_VALID_OFF, PPE_MY_MAC_VALID_LEN, 1);
+	ret = ppe_res_get(priv->my_mac, PPE_MY_MAC_ENTRIES, words,
+			  PPE_MY_MAC_WORDS);
+	if (ret < 0)
+		goto err_vsi;
+	priv->casc_mymac[port] = ret;
+	if (priv->my_mac[ret].refcount == 1)
+		ppe_tbl_write(priv, PPE_MY_MAC_TBL(ret), words,
+			      PPE_MY_MAC_WORDS);
+
+	regmap_write(priv->regmap, PPE_IN_L3_IF_TBL(vsi),
+		     PPE_L3_IF_IPV4_ROUTE_EN | PPE_L3_IF_IPV6_ROUTE_EN);
+	regmap_write(priv->regmap, PPE_IN_L3_IF_TBL(vsi) + 4,
+		     FIELD_PREP(PPE_L3_IF_TTL_EXCEED_CMD,
+				PPE_L3_IF_TTL_EXCEED_TO_CPU) |
+		     PPE_L3_IF_TTL_EXCEED_DEACCEL |
+		     FIELD_PREP(PPE_L3_IF_MAC_BITMAP, GENMASK(7, 0)));
+	ppe_l3_if_mtu_set(priv, vsi, mtu);
+	regmap_write(priv->regmap, PPE_L3_VSI_TBL(vsi),
+		     PPE_L3_VSI_IF_VALID | FIELD_PREP(PPE_L3_VSI_IF_INDEX, vsi));
+
+	regmap_write(priv->regmap, PPE_XLT_ACTION_TBL(xlt),
+		     FIELD_PREP(PPE_XLT_CVID_CMD, PPE_XLT_CVID_DEL));
+	regmap_write(priv->regmap, PPE_XLT_ACTION_W1(xlt),
+		     PPE_XLT_VSI_CMD | FIELD_PREP(PPE_XLT_VSI, vsi));
+
+	regmap_write(priv->regmap, PPE_EG_XLT_ACTION(xlt),
+		     FIELD_PREP(PPE_EG_XLT_CVID_CMD, PPE_EG_XLT_CVID_ADD) |
+		     FIELD_PREP(PPE_EG_XLT_CVID, vid));
+	regmap_write(priv->regmap, PPE_EG_XLT_ACTION_W1(xlt), 0);
+	regmap_write(priv->regmap, PPE_EG_XLT_RULE(xlt),
+		     PPE_EG_XLT_VALID |
+		     FIELD_PREP(PPE_EG_XLT_PORT_BMP, BIT(QCA_PPE_CPU_PORT)) |
+		     PPE_EG_XLT_VSI_INCL | FIELD_PREP(PPE_EG_XLT_VSI, vsi) |
+		     PPE_EG_XLT_VSI_VALID |
+		     FIELD_PREP(PPE_EG_XLT_SKEY_FMT, PPE_XLT_SKEY_UNTAGGED));
+	regmap_write(priv->regmap, PPE_EG_XLT_RULE_W1(xlt),
+		     FIELD_PREP(PPE_EG_XLT_CKEY_FMT, PPE_XLT_SKEY_UNTAGGED));
+
+	/* Key last: a key left live over an action that is not written yet
+	 * blackholes every frame it matches.
+	 */
+	regmap_write(priv->regmap, PPE_XLT_RULE_TBL(xlt),
+		     PPE_XLT_VALID | FIELD_PREP(PPE_XLT_PORT_BMP, BIT(port)) |
+		     FIELD_PREP(PPE_XLT_SKEY_FMT, PPE_XLT_SKEY_UNTAGGED));
+	regmap_write(priv->regmap, PPE_XLT_RULE_W1(xlt),
+		     FIELD_PREP(PPE_XLT_CKEY_FMT_1, PPE_XLT_CKEY_TAGGED >> 1) |
+		     PPE_XLT_CKEY_VID_INCL | FIELD_PREP(PPE_XLT_CKEY_VID, vid));
+	regmap_write(priv->regmap, PPE_XLT_RULE_TBL(xlt) + 8, 0);
+
+	return 0;
+
+err_vsi:
+	ppe_vsi_free(priv, vsi);
+	priv->casc_vsi[port] = -1;
+err_xlt:
+	ppe_xlt_idx_free(priv, &xlt);
+	priv->casc_xlt[port] = -1;
+	priv->casc_ref[port]--;
+	return ret;
+}
+
+static void ppe_casc_ingress_put(struct qca_ppe_priv *priv, int port)
+{
+	int xlt = priv->casc_xlt[port];
+	u32 vsi = priv->casc_vsi[port];
+
+	if (--priv->casc_ref[port])
+		return;
+
+	/* Ingress first, as above: the egress rule is what puts the tag back
+	 * on a frame the ingress rule stripped.
+	 */
+	if (xlt >= 0) {
+		ppe_xlt_idx_free(priv, &priv->casc_xlt[port]);
+		regmap_write(priv->regmap, PPE_EG_XLT_RULE(xlt), 0);
+		regmap_write(priv->regmap, PPE_EG_XLT_RULE_W1(xlt), 0);
+		regmap_write(priv->regmap, PPE_EG_XLT_ACTION(xlt), 0);
+		regmap_write(priv->regmap, PPE_EG_XLT_ACTION_W1(xlt), 0);
+	}
+	regmap_write(priv->regmap, PPE_L3_VSI_TBL(vsi), 0);
+	ppe_tbl_clear(priv, PPE_IN_L3_IF_TBL(vsi), PPE_L3_IF_WORDS);
+	if (ppe_res_put(priv->my_mac, priv->casc_mymac[port]))
+		ppe_tbl_clear(priv, PPE_MY_MAC_TBL(priv->casc_mymac[port]),
+			      PPE_MY_MAC_WORDS);
+	priv->casc_mymac[port] = -1;
+	ppe_vsi_free(priv, vsi);
+	priv->casc_vsi[port] = -1;
+}
+
 /* The VSI the ingress classification puts this rule's packets in - the routing
  * domain the flow belongs to, and the one ingress identifier its hardware entry
  * can carry. A domain that cannot be named is declined rather than encoded as
@@ -630,6 +786,13 @@ static int ppe_flow_ingress_vsi(struct qca_ppe_priv *priv, int iport, u16 vid)
 		return vid && vid != priv->wan_vid[iport] ? -EOPNOTSUPP :
 							    priv->wan_vsi[iport];
 
+	/* A cascaded switch's ctag is classified into a VSI of its own too, and
+	 * the rule the flowtable gave us names no tag: DSA stripped it before
+	 * the flow ever saw the frame.
+	 */
+	if (priv->casc_ref[iport])
+		return vid ? -EOPNOTSUPP : priv->casc_vsi[iport];
+
 	/* A VLAN-filtering bridge classifies a tagged frame into its VLAN's
 	 * VSI and an untagged one into the PVID's, so the port's own VSI
 	 * answers only without either.
@@ -655,7 +818,8 @@ static int ppe_flow_ingress_vsi(struct qca_ppe_priv *priv, int iport, u16 vid)
  * index keeps the two in step without a second allocator.
  */
 static int ppe_flow_alloc_ingress(struct qca_ppe_priv *priv, int iport,
-				  u16 vid, struct ppe_flow_entry *entry)
+				  u16 vid, u16 casc_vid,
+				  struct ppe_flow_entry *entry)
 {
 	struct dsa_port *dp = dsa_to_port(&priv->ds, iport);
 	u32 words[PPE_NEXTHOP_WORDS] = {};
@@ -664,6 +828,24 @@ static int ppe_flow_alloc_ingress(struct qca_ppe_priv *priv, int iport,
 	int vsi, ret;
 
 	lockdep_assert_held(&priv->vlan_lock);
+
+	/* The frame reached us from a switch cascaded below this port, still
+	 * carrying that switch's tag. Classify it before anything asks which
+	 * VSI the rule belongs to: without that the L3 stage never parses
+	 * through to the tuple and the entry, though installed, never matches.
+	 */
+	if (casc_vid && !priv->wan_ref[iport]) {
+		struct net_device *brdev = priv->port_br_dev[iport];
+
+		if (!brdev)
+			brdev = dsa_to_port(&priv->ds, iport)->user;
+
+		ret = ppe_casc_ingress_get(priv, iport, casc_vid,
+					   brdev->dev_addr, brdev->mtu);
+		if (ret)
+			return ret;
+		entry->casc_iport = iport;
+	}
 
 	vsi = ppe_flow_ingress_vsi(priv, iport, vid);
 	if (vsi < 0)
@@ -682,6 +864,13 @@ static int ppe_flow_alloc_ingress(struct qca_ppe_priv *priv, int iport,
 		entry->wan_iport = iport;
 		return 0;
 	}
+
+	/* Same for a cascade: ppe_casc_ingress_get() above owns this VSI's L3
+	 * interface and MY_MAC entry and refcounts them, so the generic path
+	 * below must not program them a second time.
+	 */
+	if (entry->casc_iport >= 0)
+		return 0;
 
 	/* The address the packet is sent to is the address of the device that
 	 * routes for this port, which is the bridge when there is one. That
@@ -853,6 +1042,11 @@ static void ppe_flow_free_ingress(struct qca_ppe_priv *priv,
 
 	if (entry->wan_iport >= 0) {
 		ppe_wan_ingress_put(priv, entry->wan_iport);
+		return;
+	}
+
+	if (entry->casc_iport >= 0) {
+		ppe_casc_ingress_put(priv, entry->casc_iport);
 		return;
 	}
 
@@ -1330,8 +1524,9 @@ static int ppe_flow_offload_replace(struct ppe_flow_block *fb,
 		 * port, and this silicon has no virtual ports to give it a
 		 * flow-table identity.
 		 */
-		iport = ppe_flow_port_by_ifindex(priv,
-						 match.key->ingress_ifindex);
+		iport = ppe_flow_port_by_ifindex_vid(priv,
+						     match.key->ingress_ifindex,
+						     &data.casc_ivid);
 		if (iport < 0)
 			return ppe_flow_reject(priv, PPE_REJECT_INGRESS_PORT);
 	}
@@ -1511,9 +1706,11 @@ static int ppe_flow_offload_replace(struct ppe_flow_block *fb,
 	entry->l3_if = -1;
 	entry->wan_port = -1;
 	entry->wan_iport = -1;
+	entry->casc_iport = -1;
 	entry->iport = iport;
 
-	ret = ppe_flow_alloc_ingress(priv, iport, data.ivid, entry);
+	ret = ppe_flow_alloc_ingress(priv, iport, data.ivid,
+				     data.casc_ivid, entry);
 	if (ret) {
 		priv->flow_reject[ret == -EOPNOTSUPP ? PPE_REJECT_INGRESS_VLAN :
 				  PPE_REJECT_RESOURCE]++;
@@ -1903,6 +2100,9 @@ int ppe_flow_offload_init(struct qca_ppe_priv *priv)
 		priv->wan_vsi[i] = -1;
 		priv->wan_mymac[i] = -1;
 		priv->wan_xlt[i] = -1;
+		priv->casc_vsi[i] = -1;
+		priv->casc_mymac[i] = -1;
+		priv->casc_xlt[i] = -1;
 	}
 
 	INIT_LIST_HEAD(&priv->flow_list);

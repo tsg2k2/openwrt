@@ -1281,6 +1281,19 @@ struct qca_ppe_priv {
 	u16 wan_ref[QCA_PPE_MAX_PORTS];
 	int wan_xlt[QCA_PPE_MAX_PORTS];
 	u16 wan_vid[QCA_PPE_MAX_PORTS];
+
+	/* A port carrying a switch cascaded below this one sees that switch's
+	 * tag_8021q ctag on every frame crossing to us. The L3 stage does not
+	 * parse through a residual tag, so the ctag is classified into a VSI of
+	 * its own and stripped, and put back on whatever leaves toward the CPU.
+	 * Allocated with the first offloaded flow on the port, shared by the
+	 * rest, mirroring the tagged-PPPoE-uplink case above.
+	 */
+	s8 casc_vsi[QCA_PPE_MAX_PORTS];
+	s8 casc_mymac[QCA_PPE_MAX_PORTS];
+	u16 casc_ref[QCA_PPE_MAX_PORTS];
+	int casc_xlt[QCA_PPE_MAX_PORTS];
+	u16 casc_vid[QCA_PPE_MAX_PORTS];
 	u32 flow_reject[PPE_REJECT_MAX];
 	u32 flow_offloaded;
 	u32 flow_reinstalled;
