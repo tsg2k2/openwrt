@@ -28,6 +28,7 @@ rtl930x-dsa-objs    := dsa/common.o   \
                         dsa/tc.o       \
                         dsa/l2.o       \
                         dsa/l3.o       \
+                        dsa/lag.o      \
                         dsa/pie.o      \
                         dsa/stats.o    \
                         dsa/vlan.o

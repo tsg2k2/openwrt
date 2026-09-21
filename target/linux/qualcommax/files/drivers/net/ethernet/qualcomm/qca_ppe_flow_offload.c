@@ -346,15 +346,74 @@ static int ppe_flow_mangle_ipv4(const struct flow_action_entry *act,
 	return 0;
 }
 
-static int ppe_flow_port_by_ifindex(struct qca_ppe_priv *priv, int ifindex)
-{
-	struct dsa_port *dp;
+/* How far below this switch a cascaded switch may sit before its ports stop
+ * being named. One hop covers a switch hanging off one of our user ports; the
+ * bound only keeps a malformed chain from spinning.
+ */
+#define PPE_CASCADE_MAX_HOPS 4
 
-	dsa_switch_for_each_user_port(dp, &priv->ds)
-		if (dp->user && dp->user->ifindex == ifindex)
-			return dp->index;
+/* Name the port of this switch that a flow's netdev is reached through.
+ *
+ * A board may hang a second switch off one of our user ports - the Verizon
+ * CR1000A cascades an RTL9303 off the lan port - and then the flow's ingress
+ * or egress netdev is a user port of THAT switch, not of ours. The frame still
+ * reaches this switch, on the port carrying the cascaded switch's conduit, so
+ * walk the conduit chain up and name that port.
+ *
+ * Called under rcu_read_lock() for dev_get_by_index_rcu()'s sake.
+ */
+static int ppe_flow_port_by_cascade(struct qca_ppe_priv *priv,
+				    struct net_device *dev)
+{
+	int hops;
+
+	for (hops = 0; dev && hops < PPE_CASCADE_MAX_HOPS; hops++) {
+		struct dsa_port *below;
+
+		if (!dsa_user_dev_check(dev))
+			break;
+
+		below = dsa_port_from_netdev(dev);
+		if (IS_ERR(below))
+			break;
+
+		if (below->ds == &priv->ds)
+			return below->index;
+
+		dev = dsa_port_to_conduit(below);
+	}
 
 	return -EOPNOTSUPP;
+}
+
+static int ppe_flow_port_by_ifindex(struct qca_ppe_priv *priv, int ifindex)
+{
+	struct net_device *dev;
+	struct net *net = NULL;
+	struct dsa_port *dp;
+	int port;
+
+	dsa_switch_for_each_user_port(dp, &priv->ds) {
+		if (!dp->user)
+			continue;
+		if (dp->user->ifindex == ifindex)
+			return dp->index;
+		/* Any port of ours names the namespace the cascade below it
+		 * lives in, which the flowtable itself does not tell us.
+		 */
+		if (!net)
+			net = dev_net(dp->user);
+	}
+
+	if (!net)
+		return -EOPNOTSUPP;
+
+	rcu_read_lock();
+	dev = dev_get_by_index_rcu(net, ifindex);
+	port = dev ? ppe_flow_port_by_cascade(priv, dev) : -EOPNOTSUPP;
+	rcu_read_unlock();
+
+	return port;
 }
 
 /* Make a tagged PPPoE WAN port route its ingress traffic in hardware, so the
