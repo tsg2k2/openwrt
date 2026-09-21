@@ -348,6 +348,7 @@ platform_copy_config() {
 	prpl,haze|\
 	qnap,301w|\
 	spectrum,sax1v1k|\
+	verizon,cr1000a|\
 	zyxel,nbg7815)
 		emmc_copy_config
 		;;
